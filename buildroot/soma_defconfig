@@ -1,0 +1,73 @@
+# SomaOS Buildroot defconfig
+# Bootable x86_64 Linux with systemd, Mesa, Wayland, GRUB2
+
+# Architecture
+BR2_x86_64=y
+
+# Toolchain
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+
+# Kernel
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_USE_DEFCONFIG=y
+BR2_LINUX_KERNEL_DEFCONFIG="x86_64"
+BR2_LINUX_KERNEL_INSTALL_TARGET=y
+
+# Bootloader — GRUB2 for BIOS boot (VirtualBox default)
+BR2_TARGET_GRUB2=y
+BR2_TARGET_GRUB2_I386_PC=y
+BR2_TARGET_GRUB2_BUILTIN_MODULES_PC="boot linux ext2 fat part_msdos part_gpt normal biosdisk"
+
+# Init system
+BR2_INIT_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD_LOGIND=y
+
+# Filesystem — ext4 root image (will be used as a VM disk)
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="1G"
+
+# Graphics
+BR2_PACKAGE_MESA3D=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_SWRAST=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_VIRGL=y
+BR2_PACKAGE_MESA3D_OPENGL_EGL=y
+BR2_PACKAGE_MESA3D_OPENGL_ES=y
+BR2_PACKAGE_LIBDRM=y
+
+# Wayland
+BR2_PACKAGE_WAYLAND=y
+BR2_PACKAGE_WAYLAND_PROTOCOLS=y
+
+# Input
+BR2_PACKAGE_LIBINPUT=y
+BR2_PACKAGE_LIBXKBCOMMON=y
+BR2_PACKAGE_EUDEV=y
+
+# Fonts (for cosmic-text rendering)
+BR2_PACKAGE_DEJAVU=y
+
+# Networking
+BR2_PACKAGE_DHCPCD=y
+BR2_PACKAGE_OPENSSH=y
+
+# Utilities
+BR2_PACKAGE_BASH=y
+BR2_PACKAGE_NANO=y
+BR2_PACKAGE_HTOP=y
+BR2_PACKAGE_LIBCURL=y
+
+# Root filesystem overlay
+BR2_ROOTFS_OVERLAY="/opt/overlay"
+
+# Post-build script to set up auto-login and services
+BR2_ROOTFS_POST_BUILD_SCRIPT="/opt/post-build.sh"
+
+# Root password (for dev/testing)
+BR2_TARGET_GENERIC_ROOT_PASSWD="soma"
+BR2_TARGET_GENERIC_HOSTNAME="somaos"
+BR2_TARGET_GENERIC_ISSUE="Welcome to SomaOS"
+
+# TTY / console
+BR2_TARGET_GENERIC_GETTY_PORT="tty1"

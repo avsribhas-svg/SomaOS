@@ -1,0 +1,16 @@
+[Unit]
+Description=Soma Compositor
+After=soma-agent.service
+Wants=soma-agent.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/soma-compositor
+Restart=always
+RestartSec=3
+Environment=RUST_LOG=info
+# Run on the DRM device
+Environment=WAYLAND_DISPLAY=wayland-0
+
+[Install]
+WantedBy=graphical.target

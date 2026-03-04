@@ -1,0 +1,9 @@
+[package]
+name = "soma-common"
+version = "0.1.0"
+edition = "2021"
+description = "Shared types and IPC protocol for SomaOS"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
