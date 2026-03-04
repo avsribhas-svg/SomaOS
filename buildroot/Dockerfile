@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y \
     gcc g++ \
     make cmake \
     libncurses5-dev \
+    libelf-dev \
+    libssl-dev \
+    flex bison \
     cpio \
     unzip \
     rsync \
@@ -22,7 +25,6 @@ RUN apt-get update && apt-get install -y \
     perl \
     patch \
     bzip2 xz-utils \
-    libssl-dev \
     device-tree-compiler \
     dosfstools mtools \
     genext2fs \
