@@ -4,6 +4,7 @@ members = [
     "soma-common",
     "soma-agent",
     "soma-compositor",
+    "soma-cli",
 ]
 
 [workspace.dependencies]

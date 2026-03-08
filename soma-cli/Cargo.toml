@@ -1,0 +1,10 @@
+[package]
+name = "soma-cli"
+version = "0.2.0"
+edition = "2021"
+description = "SomaOS CLI — test client for the agent daemon"
+
+[dependencies]
+soma-common = { path = "../soma-common" }
+serde_json = { workspace = true }
+tokio = { workspace = true }

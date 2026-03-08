@@ -2,31 +2,45 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use soma_common::{TaskPlan, DEFAULT_MODEL, OLLAMA_URL};
 
-const SYSTEM_PROMPT: &str = r#"You are an AI assistant that converts natural language instructions into structured task plans.
+use crate::capabilities::CapabilityRegistry;
+
+/// Build the system prompt dynamically from registered capabilities
+pub fn build_system_prompt(registry: &CapabilityRegistry) -> String {
+    let capabilities_schema = registry.schema_for_prompt();
+
+    format!(
+        r#"You are an AI assistant that converts natural language instructions into structured task plans.
 You MUST respond with ONLY valid JSON — no preamble, no markdown, no explanation.
 
 The JSON must follow this exact schema:
-{
+{{
   "intent": "string — a short snake_case identifier for the action",
   "description": "string — a human-readable summary of what will happen",
   "steps": [
-    {
-      "action": "execute_command",
-      "command": "string — the shell command name",
-      "args": ["array", "of", "string", "arguments"]
-    }
+    {{
+      "capability": "string — the capability name",
+      "action": "string — the action name within that capability",
+      "params": {{ "key": "value" }},
+      "description": "string — what this step does"
+    }}
   ],
   "risk_level": "low | medium | high"
-}
+}}
+
+Available capabilities and their actions:
+
+{capabilities_schema}
 
 Rules:
-- Only use these commands: ls, mkdir, open, cat, echo, pwd, rm, cp, mv, touch, head, tail, wc, find, grep, which, whoami, date, uname
-- "rm" commands are always "high" risk
-- "mkdir", "touch", "cp", "mv" are "medium" risk
-- Read-only commands are "low" risk
-- If the user input cannot be mapped to allowed commands, return:
-  {"intent": "unsupported", "description": "Cannot perform this action with available commands", "steps": [], "risk_level": "low"}
-- Respond with ONLY the JSON object. No other text."#;
+- ONLY use the capabilities and actions listed above
+- Delete actions are always "high" risk
+- Write/create/move/kill/restart actions are "medium" risk
+- Read-only actions (list, read, status, info) are "low" risk
+- If the user input cannot be mapped to available capabilities, return:
+  {{"intent": "unsupported", "description": "Cannot perform this action with available capabilities", "steps": [], "risk_level": "low"}}
+- Respond with ONLY the JSON object. No other text."#
+    )
+}
 
 #[derive(Serialize)]
 struct OllamaRequest {
@@ -54,11 +68,11 @@ impl IntentParser {
         }
     }
 
-    pub async fn parse(&self, input: &str) -> Result<TaskPlan, String> {
+    pub async fn parse(&self, input: &str, system_prompt: &str) -> Result<TaskPlan, String> {
         let request = OllamaRequest {
             model: self.model.clone(),
             prompt: input.to_string(),
-            system: SYSTEM_PROMPT.to_string(),
+            system: system_prompt.to_string(),
             stream: false,
         };
 

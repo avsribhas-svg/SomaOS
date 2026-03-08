@@ -1,0 +1,314 @@
+use serde_json::{json, Value};
+use soma_common::{ActionSchema, CapabilityResult};
+use std::fs;
+use std::path::Path;
+
+use super::param;
+use super::Capability;
+
+pub struct FileSystemCapability;
+
+impl Capability for FileSystemCapability {
+    fn name(&self) -> &str {
+        "filesystem"
+    }
+
+    fn description(&self) -> &str {
+        "File and directory operations — list, read, write, copy, move, delete, find"
+    }
+
+    fn actions(&self) -> Vec<ActionSchema> {
+        vec![
+            ActionSchema {
+                name: "list_dir".to_string(),
+                description: "List files and directories in a path".to_string(),
+                params: vec![
+                    param("path", "string", true, "Directory path to list"),
+                    param("show_hidden", "boolean", false, "Include hidden files (default: false)"),
+                ],
+            },
+            ActionSchema {
+                name: "read_file".to_string(),
+                description: "Read the contents of a text file".to_string(),
+                params: vec![
+                    param("path", "string", true, "File path to read"),
+                    param("lines", "integer", false, "Max lines to read (default: all)"),
+                ],
+            },
+            ActionSchema {
+                name: "write_file".to_string(),
+                description: "Write content to a file (creates or overwrites)".to_string(),
+                params: vec![
+                    param("path", "string", true, "File path to write"),
+                    param("content", "string", true, "Content to write"),
+                ],
+            },
+            ActionSchema {
+                name: "create_dir".to_string(),
+                description: "Create a directory (including parent directories)".to_string(),
+                params: vec![param("path", "string", true, "Directory path to create")],
+            },
+            ActionSchema {
+                name: "delete".to_string(),
+                description: "Delete a file or empty directory".to_string(),
+                params: vec![param("path", "string", true, "Path to delete")],
+            },
+            ActionSchema {
+                name: "copy".to_string(),
+                description: "Copy a file to a new location".to_string(),
+                params: vec![
+                    param("from", "string", true, "Source path"),
+                    param("to", "string", true, "Destination path"),
+                ],
+            },
+            ActionSchema {
+                name: "move_item".to_string(),
+                description: "Move/rename a file or directory".to_string(),
+                params: vec![
+                    param("from", "string", true, "Source path"),
+                    param("to", "string", true, "Destination path"),
+                ],
+            },
+            ActionSchema {
+                name: "find".to_string(),
+                description: "Find files matching a pattern in a directory".to_string(),
+                params: vec![
+                    param("path", "string", true, "Directory to search in"),
+                    param("pattern", "string", true, "Filename pattern (glob)"),
+                ],
+            },
+            ActionSchema {
+                name: "file_info".to_string(),
+                description: "Get metadata about a file (size, permissions, modified time)".to_string(),
+                params: vec![param("path", "string", true, "File path")],
+            },
+        ]
+    }
+
+    fn execute(&self, action: &str, params: &Value) -> CapabilityResult {
+        match action {
+            "list_dir" => self.list_dir(params),
+            "read_file" => self.read_file(params),
+            "write_file" => self.write_file(params),
+            "create_dir" => self.create_dir(params),
+            "delete" => self.delete(params),
+            "copy" => self.copy(params),
+            "move_item" => self.move_item(params),
+            "find" => self.find(params),
+            "file_info" => self.file_info(params),
+            _ => CapabilityResult {
+                success: false,
+                data: Value::Null,
+                error: Some(format!("Unknown filesystem action: {}", action)),
+            },
+        }
+    }
+}
+
+impl FileSystemCapability {
+    fn list_dir(&self, params: &Value) -> CapabilityResult {
+        let path = match params.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: path"),
+        };
+        let show_hidden = params
+            .get("show_hidden")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        match fs::read_dir(path) {
+            Ok(entries) => {
+                let mut items: Vec<Value> = Vec::new();
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !show_hidden && name.starts_with('.') {
+                        continue;
+                    }
+                    let meta = entry.metadata().ok();
+                    let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+                    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+
+                    items.push(json!({
+                        "name": name,
+                        "is_dir": is_dir,
+                        "size": size,
+                    }));
+                }
+                ok(json!({ "path": path, "entries": items, "count": items.len() }))
+            }
+            Err(e) => err(&format!("Cannot read directory '{}': {}", path, e)),
+        }
+    }
+
+    fn read_file(&self, params: &Value) -> CapabilityResult {
+        let path = match params.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: path"),
+        };
+        let max_lines = params.get("lines").and_then(|v| v.as_u64());
+
+        match fs::read_to_string(path) {
+            Ok(content) => {
+                let output = match max_lines {
+                    Some(n) => content
+                        .lines()
+                        .take(n as usize)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    None => content,
+                };
+                let line_count = output.lines().count();
+                ok(json!({ "path": path, "content": output, "lines": line_count }))
+            }
+            Err(e) => err(&format!("Cannot read file '{}': {}", path, e)),
+        }
+    }
+
+    fn write_file(&self, params: &Value) -> CapabilityResult {
+        let path = match params.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: path"),
+        };
+        let content = match params.get("content").and_then(|v| v.as_str()) {
+            Some(c) => c,
+            None => return err("Missing required param: content"),
+        };
+
+        match fs::write(path, content) {
+            Ok(_) => ok(json!({ "path": path, "bytes_written": content.len() })),
+            Err(e) => err(&format!("Cannot write file '{}': {}", path, e)),
+        }
+    }
+
+    fn create_dir(&self, params: &Value) -> CapabilityResult {
+        let path = match params.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: path"),
+        };
+
+        match fs::create_dir_all(path) {
+            Ok(_) => ok(json!({ "path": path, "created": true })),
+            Err(e) => err(&format!("Cannot create directory '{}': {}", path, e)),
+        }
+    }
+
+    fn delete(&self, params: &Value) -> CapabilityResult {
+        let path = match params.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: path"),
+        };
+
+        let p = Path::new(path);
+        let result = if p.is_dir() {
+            fs::remove_dir(path)
+        } else {
+            fs::remove_file(path)
+        };
+
+        match result {
+            Ok(_) => ok(json!({ "path": path, "deleted": true })),
+            Err(e) => err(&format!("Cannot delete '{}': {}", path, e)),
+        }
+    }
+
+    fn copy(&self, params: &Value) -> CapabilityResult {
+        let from = match params.get("from").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: from"),
+        };
+        let to = match params.get("to").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: to"),
+        };
+
+        match fs::copy(from, to) {
+            Ok(bytes) => ok(json!({ "from": from, "to": to, "bytes_copied": bytes })),
+            Err(e) => err(&format!("Cannot copy '{}' to '{}': {}", from, to, e)),
+        }
+    }
+
+    fn move_item(&self, params: &Value) -> CapabilityResult {
+        let from = match params.get("from").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: from"),
+        };
+        let to = match params.get("to").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: to"),
+        };
+
+        match fs::rename(from, to) {
+            Ok(_) => ok(json!({ "from": from, "to": to, "moved": true })),
+            Err(e) => err(&format!("Cannot move '{}' to '{}': {}", from, to, e)),
+        }
+    }
+
+    fn find(&self, params: &Value) -> CapabilityResult {
+        let path = match params.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: path"),
+        };
+        let pattern = match params.get("pattern").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: pattern"),
+        };
+
+        let mut matches = Vec::new();
+        if let Ok(output) = std::process::Command::new("find")
+            .args([path, "-name", pattern, "-maxdepth", "3"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if !line.is_empty() {
+                    matches.push(line.to_string());
+                }
+            }
+        }
+
+        ok(json!({ "path": path, "pattern": pattern, "matches": matches, "count": matches.len() }))
+    }
+
+    fn file_info(&self, params: &Value) -> CapabilityResult {
+        let path = match params.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return err("Missing required param: path"),
+        };
+
+        match fs::metadata(path) {
+            Ok(meta) => {
+                let modified = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+
+                ok(json!({
+                    "path": path,
+                    "size": meta.len(),
+                    "is_dir": meta.is_dir(),
+                    "is_file": meta.is_file(),
+                    "readonly": meta.permissions().readonly(),
+                    "modified_unix": modified,
+                }))
+            }
+            Err(e) => err(&format!("Cannot stat '{}': {}", path, e)),
+        }
+    }
+}
+
+fn ok(data: Value) -> CapabilityResult {
+    CapabilityResult {
+        success: true,
+        data,
+        error: None,
+    }
+}
+
+fn err(msg: &str) -> CapabilityResult {
+    CapabilityResult {
+        success: false,
+        data: Value::Null,
+        error: Some(msg.to_string()),
+    }
+}

@@ -35,13 +35,14 @@ if [ "$1" != "--image-only" ]; then
         bash -c "
             apt-get update -qq && apt-get install -y -qq musl-tools > /dev/null 2>&1
             rustup target add x86_64-unknown-linux-musl
-            cargo build --release --target x86_64-unknown-linux-musl -p soma-agent -p soma-compositor 2>&1
+            cargo build --release --target x86_64-unknown-linux-musl -p soma-agent -p soma-compositor -p soma-cli 2>&1
         "
 
     # Copy binaries to the overlay
     mkdir -p "$SCRIPT_DIR/overlay/usr/bin"
     cp "$PROJECT_DIR/target/x86_64-unknown-linux-musl/release/soma-agent" "$SCRIPT_DIR/overlay/usr/bin/" 2>/dev/null || true
     cp "$PROJECT_DIR/target/x86_64-unknown-linux-musl/release/soma-compositor" "$SCRIPT_DIR/overlay/usr/bin/" 2>/dev/null || true
+    cp "$PROJECT_DIR/target/x86_64-unknown-linux-musl/release/soma-cli" "$SCRIPT_DIR/overlay/usr/bin/" 2>/dev/null || true
 
     echo "✓ Rust binaries compiled and placed in overlay"
     echo ""

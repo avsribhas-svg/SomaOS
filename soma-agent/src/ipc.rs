@@ -6,8 +6,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 
+use crate::capabilities::CapabilityRegistry;
 use crate::executor::Executor;
-use crate::intent::IntentParser;
+use crate::intent::{self, IntentParser};
 
 /// Pending plans awaiting user approval
 type PendingPlans = Arc<Mutex<HashMap<String, TaskPlan>>>;
@@ -19,14 +20,23 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
     let listener = UnixListener::bind(AGENT_SOCKET_PATH)?;
     info!("Agent daemon listening on {}", AGENT_SOCKET_PATH);
 
+    let registry = Arc::new(CapabilityRegistry::new());
+    let system_prompt = Arc::new(intent::build_system_prompt(&registry));
     let parser = Arc::new(IntentParser::new());
     let executor = Arc::new(Executor::new());
     let pending: PendingPlans = Arc::new(Mutex::new(HashMap::new()));
 
+    info!("Registered capabilities:");
+    for cap in registry.list() {
+        info!("  • {} — {} ({} actions)", cap.name, cap.description, cap.actions.len());
+    }
+
     loop {
         let (stream, _) = listener.accept().await?;
-        info!("New compositor connection");
+        info!("New client connection");
 
+        let registry = Arc::clone(&registry);
+        let system_prompt = Arc::clone(&system_prompt);
         let parser = Arc::clone(&parser);
         let executor = Arc::clone(&executor);
         let pending = Arc::clone(&pending);
@@ -41,7 +51,7 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
                 line.clear();
                 match reader.read_line(&mut line).await {
                     Ok(0) => {
-                        info!("Compositor disconnected");
+                        info!("Client disconnected");
                         break;
                     }
                     Ok(_) => {
@@ -56,6 +66,8 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
                                     msg,
                                     &parser,
                                     &executor,
+                                    &registry,
+                                    &system_prompt,
                                     &pending,
                                     &writer,
                                 )
@@ -80,13 +92,31 @@ async fn handle_message(
     msg: CompositorMessage,
     parser: &IntentParser,
     executor: &Executor,
+    registry: &CapabilityRegistry,
+    system_prompt: &str,
     pending: &PendingPlans,
     writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
 ) {
     let response = match msg {
+        CompositorMessage::NaturalLanguageInput { text } => {
+            // Generate a unique ID and parse
+            let id = uuid::Uuid::new_v4().to_string();
+            info!("Parsing NL input [{}]: {}", id, text);
+            match parser.parse(&text, system_prompt).await {
+                Ok(plan) => {
+                    pending.lock().await.insert(id.clone(), plan.clone());
+                    AgentMessage::TaskPlanReady { id, plan }
+                }
+                Err(e) => {
+                    error!("Intent parse error: {}", e);
+                    AgentMessage::Error { id, message: e }
+                }
+            }
+        }
+
         CompositorMessage::ParseIntent { id, input } => {
-            info!("Parsing intent: {}", input);
-            match parser.parse(&input).await {
+            info!("Parsing intent [{}]: {}", id, input);
+            match parser.parse(&input, system_prompt).await {
                 Ok(plan) => {
                     pending.lock().await.insert(id.clone(), plan.clone());
                     AgentMessage::TaskPlanReady { id, plan }
@@ -104,26 +134,23 @@ async fn handle_message(
                 let mut results = Vec::new();
 
                 for (i, step) in plan.steps.iter().enumerate() {
-                    match executor.execute(&step.command, &step.args) {
-                        Ok(result) => {
-                            // Send incremental step results
-                            let step_msg = AgentMessage::StepResult {
-                                id: id.clone(),
-                                step_index: i,
-                                result: result.clone(),
-                            };
-                            send_message(&step_msg, writer).await;
-                            results.push(result);
-                        }
-                        Err(e) => {
-                            let err_msg = AgentMessage::Error {
-                                id: id.clone(),
-                                message: e,
-                            };
-                            send_message(&err_msg, writer).await;
-                            return;
-                        }
-                    }
+                    let result = executor.execute_step(step, registry);
+                    info!(
+                        "  Step {}: {}.{} → {}",
+                        i,
+                        step.capability,
+                        step.action,
+                        if result.success { "ok" } else { "error" }
+                    );
+
+                    // Send incremental step results
+                    let step_msg = AgentMessage::StepResult {
+                        id: id.clone(),
+                        step_index: i,
+                        result: result.clone(),
+                    };
+                    send_message(&step_msg, writer).await;
+                    results.push(result);
                 }
 
                 AgentMessage::ExecutionComplete { id, results }
@@ -147,13 +174,9 @@ async fn handle_message(
             AgentMessage::DirectOutput { id, result }
         }
 
-        CompositorMessage::ReadClipboard { id } => {
-            // Basic clipboard read attempt
-            let result = executor.execute_raw("pbpaste 2>/dev/null || xclip -selection clipboard -o 2>/dev/null || echo 'Clipboard unavailable'");
-            AgentMessage::ClipboardContent {
-                id,
-                content: result.stdout,
-            }
+        CompositorMessage::ListCapabilities => {
+            let capabilities = registry.list();
+            AgentMessage::Capabilities { capabilities }
         }
 
         CompositorMessage::Ping => AgentMessage::Pong,

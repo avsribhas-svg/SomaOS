@@ -1,4 +1,42 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+// ──────────────────────────────────────────────
+//  Capability system types
+// ──────────────────────────────────────────────
+
+/// Describes a single action a capability can perform
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionSchema {
+    pub name: String,
+    pub description: String,
+    pub params: Vec<ParamSchema>,
+}
+
+/// Parameter definition for an action
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamSchema {
+    pub name: String,
+    pub param_type: String, // "string", "integer", "boolean"
+    pub required: bool,
+    pub description: String,
+}
+
+/// Structured output from a capability execution
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityResult {
+    pub success: bool,
+    pub data: Value,
+    pub error: Option<String>,
+}
+
+/// Describes a registered capability (sent to compositor for discovery)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityInfo {
+    pub name: String,
+    pub description: String,
+    pub actions: Vec<ActionSchema>,
+}
 
 // ──────────────────────────────────────────────
 //  Task Plan types (LLM output)
@@ -12,11 +50,13 @@ pub enum RiskLevel {
     High,
 }
 
+/// A single step in a task plan — references a capability + action
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskStep {
+    pub capability: String,
     pub action: String,
-    pub command: String,
-    pub args: Vec<String>,
+    pub params: Value,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,7 +68,7 @@ pub struct TaskPlan {
 }
 
 // ──────────────────────────────────────────────
-//  Command execution results
+//  Command execution results (legacy, still used for terminal)
 // ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,11 +83,13 @@ pub struct CommandResult {
 //  IPC protocol (compositor ↔ agent)
 // ──────────────────────────────────────────────
 
-/// Messages sent from the compositor to the agent daemon
+/// Messages sent from the compositor (or CLI) to the agent daemon
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum CompositorMessage {
-    /// Parse natural language into a TaskPlan
+    /// Natural language input → parse into a TaskPlan
+    NaturalLanguageInput { text: String },
+    /// Parse natural language into a TaskPlan (with tracking ID)
     ParseIntent { id: String, input: String },
     /// User approved the plan — execute it
     Approve { id: String },
@@ -55,30 +97,33 @@ pub enum CompositorMessage {
     Reject { id: String },
     /// Directly execute a shell command (from the terminal)
     DirectExec { id: String, command: String },
-    /// Read clipboard contents
-    ReadClipboard { id: String },
+    /// List available capabilities
+    ListCapabilities,
     /// Ping / health check
     Ping,
 }
 
-/// Messages sent from the agent daemon to the compositor
+/// Messages sent from the agent daemon to the compositor (or CLI)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AgentMessage {
     /// LLM returned a parsed task plan
     TaskPlanReady { id: String, plan: TaskPlan },
-    /// A task step completed
+    /// A capability step completed
     StepResult {
         id: String,
         step_index: usize,
-        result: CommandResult,
+        result: CapabilityResult,
     },
     /// All steps in the plan have finished
-    ExecutionComplete { id: String, results: Vec<CommandResult> },
+    ExecutionComplete {
+        id: String,
+        results: Vec<CapabilityResult>,
+    },
     /// An error occurred
     Error { id: String, message: String },
-    /// Clipboard content
-    ClipboardContent { id: String, content: String },
+    /// Available capabilities
+    Capabilities { capabilities: Vec<CapabilityInfo> },
     /// Direct command output (for terminal)
     DirectOutput { id: String, result: CommandResult },
     /// Pong
@@ -129,4 +174,4 @@ pub const AGENT_SOCKET_PATH: &str = "/tmp/soma-agent.sock";
 pub const OLLAMA_URL: &str = "http://localhost:11434/api/generate";
 
 /// Default LLM model
-pub const DEFAULT_MODEL: &str = "deepseek-r1:7b";
+pub const DEFAULT_MODEL: &str = "tinyllama";

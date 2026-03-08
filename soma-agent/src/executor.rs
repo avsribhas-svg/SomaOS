@@ -1,12 +1,9 @@
-use soma_common::CommandResult;
+use soma_common::{CapabilityResult, CommandResult, TaskStep};
 use std::process::Command;
 
-/// Whitelist of commands allowed to be executed
-const ALLOWED_COMMANDS: &[&str] = &[
-    "ls", "mkdir", "open", "cat", "echo", "pwd", "rm", "cp", "mv", "touch",
-    "head", "tail", "wc", "find", "grep", "which", "whoami", "date", "uname",
-];
+use crate::capabilities::CapabilityRegistry;
 
+/// Execute task steps through the capability registry
 pub struct Executor;
 
 impl Executor {
@@ -14,24 +11,9 @@ impl Executor {
         Self
     }
 
-    /// Execute a whitelisted command, returning the result
-    pub fn execute(&self, command: &str, args: &[String]) -> Result<CommandResult, String> {
-        if !ALLOWED_COMMANDS.contains(&command) {
-            return Err(format!(
-                "Command '{}' is not allowed. Whitelist: {:?}",
-                command, ALLOWED_COMMANDS
-            ));
-        }
-
-        match Command::new(command).args(args).output() {
-            Ok(output) => Ok(CommandResult {
-                success: output.status.success(),
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                exit_code: output.status.code(),
-            }),
-            Err(e) => Err(format!("Failed to execute '{}': {}", command, e)),
-        }
+    /// Execute a capability-based task step
+    pub fn execute_step(&self, step: &TaskStep, registry: &CapabilityRegistry) -> CapabilityResult {
+        registry.execute(&step.capability, &step.action, &step.params)
     }
 
     /// Execute a raw shell command (for the embedded terminal)
