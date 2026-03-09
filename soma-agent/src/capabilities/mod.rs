@@ -3,6 +3,8 @@ use soma_common::{ActionSchema, CapabilityInfo, CapabilityResult, ParamSchema};
 use std::collections::HashMap;
 
 pub mod filesystem;
+pub mod network;
+pub mod package;
 pub mod process;
 pub mod system;
 
@@ -36,6 +38,8 @@ impl CapabilityRegistry {
         registry.register(Box::new(filesystem::FileSystemCapability));
         registry.register(Box::new(process::ProcessCapability));
         registry.register(Box::new(system::SystemCapability));
+        registry.register(Box::new(network::NetworkCapability));
+        registry.register(Box::new(package::PackageCapability));
 
         registry
     }

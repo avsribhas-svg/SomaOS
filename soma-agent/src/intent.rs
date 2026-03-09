@@ -17,8 +17,10 @@ Schema:
 Available capabilities:
 {capabilities_schema}
 Rules:
-- Delete/kill = "high" risk. Write/create/move/restart = "medium" risk. Read-only = "low" risk.
+- Delete/kill/remove package = "high" risk. Write/create/move/restart/install = "medium" risk. Read-only = "low" risk.
 - If unmappable: {{"intent":"unsupported","description":"Cannot perform this","steps":[],"risk_level":"low"}}
+- You may create multi-step plans with multiple steps when needed.
+- If conversation context is provided, use it to resolve references like "same", "that", "again", etc.
 
 Examples:
 Input: "list files in /home"
@@ -32,6 +34,18 @@ Output: {{"intent":"list_processes","description":"List running processes","step
 
 Input: "delete /tmp/test.txt"
 Output: {{"intent":"delete_file","description":"Delete /tmp/test.txt","steps":[{{"capability":"filesystem","action":"delete","params":{{"path":"/tmp/test.txt"}},"description":"Delete the file /tmp/test.txt"}}],"risk_level":"high"}}
+
+Input: "ping google.com"
+Output: {{"intent":"ping_host","description":"Ping google.com","steps":[{{"capability":"network","action":"ping","params":{{"host":"google.com","count":4}},"description":"Ping google.com"}}],"risk_level":"low"}}
+
+Input: "what are my network interfaces"
+Output: {{"intent":"list_interfaces","description":"List network interfaces","steps":[{{"capability":"network","action":"ifconfig","params":{{}},"description":"List all network interfaces"}}],"risk_level":"low"}}
+
+Input: "list installed packages"
+Output: {{"intent":"list_packages","description":"List installed packages","steps":[{{"capability":"package","action":"list_installed","params":{{}},"description":"List all installed packages"}}],"risk_level":"low"}}
+
+Input: "find all log files in /var and check disk usage"
+Output: {{"intent":"inspect_system","description":"Find log files and check disk usage","steps":[{{"capability":"filesystem","action":"find","params":{{"path":"/var","pattern":"*.log"}},"description":"Find .log files in /var"}},{{"capability":"system","action":"disk_usage","params":{{}},"description":"Check disk usage"}}],"risk_level":"low"}}
 
 RESPOND WITH ONLY THE JSON OBJECT. NO OTHER TEXT."#
     )
@@ -64,10 +78,26 @@ impl IntentParser {
         }
     }
 
-    pub async fn parse(&self, input: &str, system_prompt: &str) -> Result<TaskPlan, String> {
+    /// Parse with optional conversation context
+    pub async fn parse(
+        &self,
+        input: &str,
+        system_prompt: &str,
+        context: Option<&str>,
+    ) -> Result<TaskPlan, String> {
+        // Build prompt with optional context
+        let prompt = if let Some(ctx) = context {
+            format!(
+                "Recent conversation:\n{}\n\nCurrent request: {}",
+                ctx, input
+            )
+        } else {
+            input.to_string()
+        };
+
         let request = OllamaRequest {
             model: self.model.clone(),
-            prompt: input.to_string(),
+            prompt,
             system: system_prompt.to_string(),
             stream: false,
             format: "json".to_string(),

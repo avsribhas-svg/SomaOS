@@ -13,6 +13,9 @@ use crate::intent::{self, IntentParser};
 /// Pending plans awaiting user approval
 type PendingPlans = Arc<Mutex<HashMap<String, TaskPlan>>>;
 
+/// Conversation context — stores recent exchanges for follow-up resolution
+const MAX_CONTEXT_ENTRIES: usize = 5;
+
 pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
     // Clean up old socket
     let _ = std::fs::remove_file(AGENT_SOCKET_PATH);
@@ -28,7 +31,12 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Registered capabilities:");
     for cap in registry.list() {
-        info!("  • {} — {} ({} actions)", cap.name, cap.description, cap.actions.len());
+        info!(
+            "  • {} — {} ({} actions)",
+            cap.name,
+            cap.description,
+            cap.actions.len()
+        );
     }
 
     loop {
@@ -46,6 +54,9 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
             let mut reader = BufReader::new(reader);
             let writer = Arc::new(Mutex::new(writer));
             let mut line = String::new();
+
+            // Per-client conversation context
+            let mut context: Vec<(String, String)> = Vec::new();
 
             loop {
                 line.clear();
@@ -70,6 +81,7 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
                                     &system_prompt,
                                     &pending,
                                     &writer,
+                                    &mut context,
                                 )
                                 .await;
                             }
@@ -88,6 +100,18 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+/// Format conversation context for the LLM prompt
+fn format_context(context: &[(String, String)]) -> Option<String> {
+    if context.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = context
+        .iter()
+        .map(|(user, summary)| format!("User: {}\nAgent: {}", user, summary))
+        .collect();
+    Some(lines.join("\n\n"))
+}
+
 async fn handle_message(
     msg: CompositorMessage,
     parser: &IntentParser,
@@ -96,14 +120,30 @@ async fn handle_message(
     system_prompt: &str,
     pending: &PendingPlans,
     writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    context: &mut Vec<(String, String)>,
 ) {
     let response = match msg {
         CompositorMessage::NaturalLanguageInput { text } => {
-            // Generate a unique ID and parse
             let id = uuid::Uuid::new_v4().to_string();
             info!("Parsing NL input [{}]: {}", id, text);
-            match parser.parse(&text, system_prompt).await {
+
+            let ctx = format_context(context);
+            match parser
+                .parse(&text, system_prompt, ctx.as_deref())
+                .await
+            {
                 Ok(plan) => {
+                    // Add to context
+                    let summary = format!(
+                        "Planned: {} ({} steps)",
+                        plan.intent,
+                        plan.steps.len()
+                    );
+                    context.push((text, summary));
+                    if context.len() > MAX_CONTEXT_ENTRIES {
+                        context.remove(0);
+                    }
+
                     pending.lock().await.insert(id.clone(), plan.clone());
                     AgentMessage::TaskPlanReady { id, plan }
                 }
@@ -116,8 +156,22 @@ async fn handle_message(
 
         CompositorMessage::ParseIntent { id, input } => {
             info!("Parsing intent [{}]: {}", id, input);
-            match parser.parse(&input, system_prompt).await {
+            let ctx = format_context(context);
+            match parser
+                .parse(&input, system_prompt, ctx.as_deref())
+                .await
+            {
                 Ok(plan) => {
+                    let summary = format!(
+                        "Planned: {} ({} steps)",
+                        plan.intent,
+                        plan.steps.len()
+                    );
+                    context.push((input, summary));
+                    if context.len() > MAX_CONTEXT_ENTRIES {
+                        context.remove(0);
+                    }
+
                     pending.lock().await.insert(id.clone(), plan.clone());
                     AgentMessage::TaskPlanReady { id, plan }
                 }
@@ -143,7 +197,6 @@ async fn handle_message(
                         if result.success { "ok" } else { "error" }
                     );
 
-                    // Send incremental step results
                     let step_msg = AgentMessage::StepResult {
                         id: id.clone(),
                         step_index: i,
@@ -151,6 +204,17 @@ async fn handle_message(
                     };
                     send_message(&step_msg, writer).await;
                     results.push(result);
+                }
+
+                // Update context with execution results
+                let ok = results.iter().filter(|r| r.success).count();
+                if let Some(last) = context.last_mut() {
+                    last.1 = format!(
+                        "Executed: {} ({}/{} steps succeeded)",
+                        plan.intent,
+                        ok,
+                        results.len()
+                    );
                 }
 
                 AgentMessage::ExecutionComplete { id, results }
