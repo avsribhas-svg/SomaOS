@@ -55,16 +55,25 @@ pub enum RiskLevel {
 pub struct TaskStep {
     pub capability: String,
     pub action: String,
+    #[serde(default)]
     pub params: Value,
+    #[serde(default)]
     pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskPlan {
     pub intent: String,
+    #[serde(default)]
     pub description: String,
+    #[serde(default)]
     pub steps: Vec<TaskStep>,
+    #[serde(default = "default_risk")]
     pub risk_level: RiskLevel,
+}
+
+fn default_risk() -> RiskLevel {
+    RiskLevel::Low
 }
 
 // ──────────────────────────────────────────────

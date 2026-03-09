@@ -9,36 +9,31 @@ pub fn build_system_prompt(registry: &CapabilityRegistry) -> String {
     let capabilities_schema = registry.schema_for_prompt();
 
     format!(
-        r#"You are an AI assistant that converts natural language instructions into structured task plans.
-You MUST respond with ONLY valid JSON — no preamble, no markdown, no explanation.
+        r#"You convert natural language into JSON task plans. Respond with ONLY valid JSON.
 
-The JSON must follow this exact schema:
-{{
-  "intent": "string — a short snake_case identifier for the action",
-  "description": "string — a human-readable summary of what will happen",
-  "steps": [
-    {{
-      "capability": "string — the capability name",
-      "action": "string — the action name within that capability",
-      "params": {{ "key": "value" }},
-      "description": "string — what this step does"
-    }}
-  ],
-  "risk_level": "low | medium | high"
-}}
+Schema:
+{{"intent":"string","description":"string","steps":[{{"capability":"string","action":"string","params":{{}},"description":"string"}}],"risk_level":"low|medium|high"}}
 
-Available capabilities and their actions:
-
+Available capabilities:
 {capabilities_schema}
-
 Rules:
-- ONLY use the capabilities and actions listed above
-- Delete actions are always "high" risk
-- Write/create/move/kill/restart actions are "medium" risk
-- Read-only actions (list, read, status, info) are "low" risk
-- If the user input cannot be mapped to available capabilities, return:
-  {{"intent": "unsupported", "description": "Cannot perform this action with available capabilities", "steps": [], "risk_level": "low"}}
-- Respond with ONLY the JSON object. No other text."#
+- Delete/kill = "high" risk. Write/create/move/restart = "medium" risk. Read-only = "low" risk.
+- If unmappable: {{"intent":"unsupported","description":"Cannot perform this","steps":[],"risk_level":"low"}}
+
+Examples:
+Input: "list files in /home"
+Output: {{"intent":"list_directory","description":"List files in /home","steps":[{{"capability":"filesystem","action":"list_dir","params":{{"path":"/home"}},"description":"List directory contents of /home"}}],"risk_level":"low"}}
+
+Input: "what is the hostname"
+Output: {{"intent":"get_hostname","description":"Get system hostname","steps":[{{"capability":"system","action":"hostname","params":{{}},"description":"Get the system hostname"}}],"risk_level":"low"}}
+
+Input: "show running processes"
+Output: {{"intent":"list_processes","description":"List running processes","steps":[{{"capability":"process","action":"list_processes","params":{{}},"description":"List all running processes"}}],"risk_level":"low"}}
+
+Input: "delete /tmp/test.txt"
+Output: {{"intent":"delete_file","description":"Delete /tmp/test.txt","steps":[{{"capability":"filesystem","action":"delete","params":{{"path":"/tmp/test.txt"}},"description":"Delete the file /tmp/test.txt"}}],"risk_level":"high"}}
+
+RESPOND WITH ONLY THE JSON OBJECT. NO OTHER TEXT."#
     )
 }
 
@@ -48,6 +43,7 @@ struct OllamaRequest {
     prompt: String,
     system: String,
     stream: bool,
+    format: String,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +70,7 @@ impl IntentParser {
             prompt: input.to_string(),
             system: system_prompt.to_string(),
             stream: false,
+            format: "json".to_string(),
         };
 
         let response = self
