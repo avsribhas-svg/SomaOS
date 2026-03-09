@@ -1,7 +1,8 @@
 use soma_common::{AgentMessage, CompositorMessage, AGENT_SOCKET_PATH};
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -22,121 +23,163 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  /quit         — exit");
     println!();
 
-    // Spawn a task to read agent responses
-    let response_writer = writer.clone();
-    let response_handle = tokio::spawn(async move {
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => {
-                    println!("\n[Agent disconnected]");
-                    break;
-                }
-                Ok(_) => {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    match serde_json::from_str::<AgentMessage>(trimmed) {
-                        Ok(msg) => handle_agent_message(msg, &response_writer).await,
-                        Err(e) => eprintln!("[Parse error: {}]", e),
+    // Channel for stdin lines (single reader, avoids race condition)
+    let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
+
+    // Spawn a dedicated stdin reader thread
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            match line {
+                Ok(l) => {
+                    if stdin_tx.send(l).is_err() {
+                        break;
                     }
                 }
-                Err(e) => {
-                    eprintln!("[Read error: {}]", e);
-                    break;
-                }
+                Err(_) => break,
             }
         }
     });
 
-    // Main input loop
+    // Main event loop
+    let mut pending_approval: Option<String> = None;
+    let mut agent_line = String::new();
+
+    print!("soma> ");
+    io::stdout().flush()?;
+
     loop {
-        print!("soma> ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input)? == 0 {
-            break; // EOF
-        }
-        let input = input.trim();
-        if input.is_empty() {
-            continue;
-        }
-
-        let msg = if input == "/quit" {
-            break;
-        } else if input == "/caps" {
-            CompositorMessage::ListCapabilities
-        } else if let Some(cmd) = input.strip_prefix("/exec ") {
-            CompositorMessage::DirectExec {
-                id: uuid_v4(),
-                command: cmd.to_string(),
+        tokio::select! {
+            // Read from agent socket
+            result = reader.read_line(&mut agent_line) => {
+                match result {
+                    Ok(0) => {
+                        println!("\n[Agent disconnected]");
+                        break;
+                    }
+                    Ok(_) => {
+                        let trimmed = agent_line.trim();
+                        if !trimmed.is_empty() {
+                            if let Ok(msg) = serde_json::from_str::<AgentMessage>(trimmed) {
+                                pending_approval = handle_agent_message(msg);
+                                if pending_approval.is_none() {
+                                    print!("soma> ");
+                                    io::stdout().flush()?;
+                                }
+                            }
+                        }
+                        agent_line.clear();
+                    }
+                    Err(e) => {
+                        eprintln!("[Read error: {}]", e);
+                        break;
+                    }
+                }
             }
-        } else {
-            CompositorMessage::NaturalLanguageInput {
-                text: input.to_string(),
-            }
-        };
 
-        let json = serde_json::to_string(&msg)?;
-        let mut w = writer.lock().await;
-        w.write_all(format!("{}\n", json).as_bytes()).await?;
+            // Read from stdin
+            Some(input) = stdin_rx.recv() => {
+                let input = input.trim().to_string();
+                if input.is_empty() {
+                    if pending_approval.is_some() {
+                        print!("[Approve? y/n] ");
+                    } else {
+                        print!("soma> ");
+                    }
+                    io::stdout().flush()?;
+                    continue;
+                }
+
+                // Handle approval prompt
+                if let Some(ref plan_id) = pending_approval {
+                    let msg = if input == "y" || input == "yes" {
+                        CompositorMessage::Approve { id: plan_id.clone() }
+                    } else {
+                        println!("[Plan rejected]");
+                        CompositorMessage::Reject { id: plan_id.clone() }
+                    };
+                    pending_approval = None;
+
+                    let json = serde_json::to_string(&msg)?;
+                    let mut w = writer.lock().await;
+                    w.write_all(format!("{}\n", json).as_bytes()).await?;
+                    continue;
+                }
+
+                // Handle CLI commands
+                let msg = if input == "/quit" {
+                    break;
+                } else if input == "/caps" {
+                    CompositorMessage::ListCapabilities
+                } else if let Some(cmd) = input.strip_prefix("/exec ") {
+                    CompositorMessage::DirectExec {
+                        id: simple_id(),
+                        command: cmd.to_string(),
+                    }
+                } else {
+                    // Natural language input
+                    CompositorMessage::NaturalLanguageInput {
+                        text: input.to_string(),
+                    }
+                };
+
+                let json = serde_json::to_string(&msg)?;
+                let mut w = writer.lock().await;
+                w.write_all(format!("{}\n", json).as_bytes()).await?;
+            }
+        }
     }
 
-    response_handle.abort();
     println!("Goodbye!");
     Ok(())
 }
 
-async fn handle_agent_message(
-    msg: AgentMessage,
-    writer: &std::sync::Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
-) {
+/// Handle an agent message, returns Some(id) if approval is needed
+fn handle_agent_message(msg: AgentMessage) -> Option<String> {
     match msg {
         AgentMessage::TaskPlanReady { id, plan } => {
             println!();
             println!("┌─── Task Plan ───────────────────────────┐");
             println!("│ Intent: {}", plan.intent);
-            println!("│ Description: {}", plan.description);
+            if !plan.description.is_empty() {
+                println!("│ Description: {}", plan.description);
+            }
             println!("│ Risk: {}", plan.risk_level);
-            println!("│ Steps:");
-            for (i, step) in plan.steps.iter().enumerate() {
-                println!("│   {}. {}.{} — {}", i + 1, step.capability, step.action, step.description);
-                println!("│      params: {}", step.params);
+            if !plan.steps.is_empty() {
+                println!("│ Steps:");
+                for (i, step) in plan.steps.iter().enumerate() {
+                    let desc = if step.description.is_empty() {
+                        format!("{}.{}", step.capability, step.action)
+                    } else {
+                        step.description.clone()
+                    };
+                    println!("│   {}. {} — {}", i + 1, format!("{}.{}", step.capability, step.action), desc);
+                    if !step.params.is_null() && step.params != serde_json::json!({}) {
+                        println!("│      params: {}", step.params);
+                    }
+                }
             }
             println!("└──────────────────────────────────────────┘");
             println!();
-
-            // Ask for approval
             print!("[Approve? y/n] ");
-            io::stdout().flush().unwrap();
-
-            let mut response = String::new();
-            io::stdin().read_line(&mut response).unwrap();
-            let response = response.trim().to_lowercase();
-
-            let msg = if response == "y" || response == "yes" {
-                CompositorMessage::Approve { id }
-            } else {
-                CompositorMessage::Reject { id }
-            };
-
-            let json = serde_json::to_string(&msg).unwrap();
-            let mut w = writer.lock().await;
-            let _ = w.write_all(format!("{}\n", json).as_bytes()).await;
+            io::stdout().flush().ok();
+            Some(id)
         }
 
         AgentMessage::StepResult {
             step_index, result, ..
         } => {
             if result.success {
-                println!("  ✓ Step {} completed:", step_index + 1);
-                // Pretty-print the data
+                println!("  ✓ Step {}:", step_index + 1);
                 if let Ok(pretty) = serde_json::to_string_pretty(&result.data) {
-                    for line in pretty.lines() {
+                    // Limit output to avoid flooding the terminal
+                    let lines: Vec<&str> = pretty.lines().collect();
+                    let max_lines = 30;
+                    for line in lines.iter().take(max_lines) {
                         println!("    {}", line);
+                    }
+                    if lines.len() > max_lines {
+                        println!("    ... ({} more lines)", lines.len() - max_lines);
                     }
                 }
             } else {
@@ -146,19 +189,22 @@ async fn handle_agent_message(
                     result.error.unwrap_or_default()
                 );
             }
+            None
         }
 
         AgentMessage::ExecutionComplete { results, .. } => {
             let ok_count = results.iter().filter(|r| r.success).count();
             println!();
-            println!("[Execution complete: {}/{} steps succeeded]", ok_count, results.len());
+            println!("[Done: {}/{} steps succeeded]", ok_count, results.len());
             println!();
+            None
         }
 
         AgentMessage::Error { message, .. } => {
             println!();
             println!("[Error] {}", message);
             println!();
+            None
         }
 
         AgentMessage::Capabilities { capabilities } => {
@@ -172,6 +218,7 @@ async fn handle_agent_message(
             }
             println!("└──────────────────────────────────────────┘");
             println!();
+            None
         }
 
         AgentMessage::DirectOutput { result, .. } => {
@@ -181,16 +228,17 @@ async fn handle_agent_message(
             if !result.stderr.is_empty() {
                 eprint!("{}", result.stderr);
             }
+            None
         }
 
         AgentMessage::Pong => {
             println!("[Pong]");
+            None
         }
     }
 }
 
-fn uuid_v4() -> String {
-    // Simple UUID v4 without external dependency
+fn simple_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)

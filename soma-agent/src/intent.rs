@@ -12,7 +12,7 @@ pub fn build_system_prompt(registry: &CapabilityRegistry) -> String {
         r#"You convert natural language into JSON task plans. Respond with ONLY valid JSON.
 
 Schema:
-{{"intent":"string","description":"string","steps":[{{"capability":"string","action":"string","params":{{}},"description":"string"}}],"risk_level":"low|medium|high"}}
+{{"intent":"string","description":"string","steps":[{{"capability":"string","action":"string","params":{{}},"description":"string"}}],"risk_level":"low"}}
 
 Available capabilities:
 {capabilities_schema}
