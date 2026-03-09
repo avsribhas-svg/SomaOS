@@ -315,7 +315,8 @@ impl ApplicationHandler for SomaApp {
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_amount = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y * 40.0,
-                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                    // macOS trackpad: negate for natural scroll, scale up for responsiveness
+                    MouseScrollDelta::PixelDelta(pos) => -(pos.y as f32) * 1.5,
                 };
                 // Scroll the focused panel
                 match self.focus {

@@ -44,6 +44,12 @@ Output: {{"intent":"list_interfaces","description":"List network interfaces","st
 Input: "list installed packages"
 Output: {{"intent":"list_packages","description":"List installed packages","steps":[{{"capability":"package","action":"list_installed","params":{{}},"description":"List all installed packages"}}],"risk_level":"low"}}
 
+Input: "check disk usage"
+Output: {{"intent":"check_disk","description":"Check disk usage","steps":[{{"capability":"system","action":"disk_usage","params":{{}},"description":"Check current disk usage"}}],"risk_level":"low"}}
+
+Input: "show memory info"
+Output: {{"intent":"memory_info","description":"Show system memory info","steps":[{{"capability":"system","action":"memory_info","params":{{}},"description":"Show memory usage"}}],"risk_level":"low"}}
+
 Input: "find all log files in /var and check disk usage"
 Output: {{"intent":"inspect_system","description":"Find log files and check disk usage","steps":[{{"capability":"filesystem","action":"find","params":{{"path":"/var","pattern":"*.log"}},"description":"Find .log files in /var"}},{{"capability":"system","action":"disk_usage","params":{{}},"description":"Check disk usage"}}],"risk_level":"low"}}
 
