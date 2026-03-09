@@ -183,4 +183,4 @@ pub const AGENT_SOCKET_PATH: &str = "/tmp/soma-agent.sock";
 pub const OLLAMA_URL: &str = "http://localhost:11434/api/generate";
 
 /// Default LLM model
-pub const DEFAULT_MODEL: &str = "tinyllama";
+pub const DEFAULT_MODEL: &str = "llama3.2:3b";

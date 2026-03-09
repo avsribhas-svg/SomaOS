@@ -76,6 +76,13 @@ impl SomaApp {
         if let Some(rx) = &self.agent_rx {
             if let Ok(mut rx) = rx.try_lock() {
                 while let Ok(msg) = rx.try_recv() {
+                    // Route DirectOutput to terminal, everything else to sidebar
+                    match &msg {
+                        soma_common::AgentMessage::DirectOutput { result, .. } => {
+                            self.terminal.add_output(&result.stdout, &result.stderr);
+                        }
+                        _ => {}
+                    }
                     self.sidebar.handle_agent_message(msg);
                 }
             }
@@ -291,7 +298,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     info!("╔══════════════════════════════════════╗");
-    info!("║    SomaOS Compositor v0.1.0 (dev)    ║");
+    info!("║    SomaOS Compositor v0.3.0 (dev)    ║");
     info!("╚══════════════════════════════════════╝");
 
     // Create a tokio runtime for async IPC

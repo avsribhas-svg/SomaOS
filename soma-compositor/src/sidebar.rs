@@ -1,4 +1,4 @@
-use soma_common::{AgentMessage, AgentStatus, CommandResult, CompositorMessage, TaskPlan, RiskLevel};
+use soma_common::{AgentMessage, AgentStatus, CapabilityResult, CompositorMessage, TaskPlan, RiskLevel};
 use crate::renderer::Renderer;
 use tiny_skia::Pixmap;
 
@@ -11,7 +11,7 @@ const MAX_HISTORY: usize = 50;
 pub struct HistoryEntry {
     pub input: String,
     pub plan: Option<TaskPlan>,
-    pub results: Vec<CommandResult>,
+    pub results: Vec<CapabilityResult>,
     pub approved: bool,
     pub error: Option<String>,
 }
@@ -21,7 +21,7 @@ pub struct Sidebar {
     pub status: AgentStatus,
     pub current_plan: Option<TaskPlan>,
     pub current_plan_id: Option<String>,
-    pub results: Vec<CommandResult>,
+    pub results: Vec<CapabilityResult>,
     pub error: Option<String>,
     pub history: Vec<HistoryEntry>,
     pub scroll_offset: f32,
@@ -70,8 +70,7 @@ impl Sidebar {
                 self.error = None;
                 self.results.clear();
 
-                let id = uuid::Uuid::new_v4().to_string();
-                Some(CompositorMessage::ParseIntent { id, input: text })
+                Some(CompositorMessage::NaturalLanguageInput { text })
             }
             AgentStatus::AwaitingApproval => {
                 self.on_approve()
@@ -97,7 +96,7 @@ impl Sidebar {
             self.status = AgentStatus::Idle;
 
             self.history.push(HistoryEntry {
-                input: plan.as_ref().map(|p| p.description.clone()).unwrap_or_default(),
+                input: plan.as_ref().map(|p| p.intent.clone()).unwrap_or_default(),
                 plan,
                 results: vec![],
                 approved: false,
@@ -128,7 +127,7 @@ impl Sidebar {
                 self.status = AgentStatus::Completed;
                 let plan = self.current_plan.take();
                 self.history.push(HistoryEntry {
-                    input: plan.as_ref().map(|p| p.description.clone()).unwrap_or_default(),
+                    input: plan.as_ref().map(|p| p.intent.clone()).unwrap_or_default(),
                     plan,
                     results: results.clone(),
                     approved: true,
@@ -145,15 +144,12 @@ impl Sidebar {
                 let plan = self.current_plan.take();
                 self.current_plan_id = None;
                 self.history.push(HistoryEntry {
-                    input: plan.as_ref().map(|p| p.description.clone()).unwrap_or_default(),
+                    input: plan.as_ref().map(|p| p.intent.clone()).unwrap_or_default(),
                     plan,
                     results: vec![],
                     approved: false,
                     error: Some(message),
                 });
-            }
-            AgentMessage::DirectOutput { result, .. } => {
-                self.results.push(result);
             }
             _ => {}
         }
@@ -239,10 +235,11 @@ impl Sidebar {
                 renderer.draw_text(pixmap, &display_text, 38.0, y + 9.0, w - 58.0, 11.0, t.text_primary);
                 y += 38.0;
 
-                // Results
+                // Results — display structured capability data
                 for result in &entry.results {
-                    if !result.stdout.is_empty() {
-                        let lines: Vec<&str> = result.stdout.lines().take(5).collect();
+                    if result.success {
+                        let display = format_capability_result(&result.data);
+                        let lines: Vec<&str> = display.lines().take(5).collect();
                         let text = lines.join("\n");
                         let block_h = (lines.len() as f32 * 15.0).max(24.0) + 12.0;
                         renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, block_h, 6.0, [74, 222, 128, 12]);
@@ -266,13 +263,19 @@ impl Sidebar {
                 if y > content_y + content_h {
                     break;
                 }
-                if !result.stdout.is_empty() {
-                    let lines: Vec<&str> = result.stdout.lines().take(8).collect();
+                if result.success {
+                    let display = format_capability_result(&result.data);
+                    let lines: Vec<&str> = display.lines().take(8).collect();
                     let text = lines.join("\n");
                     let block_h = (lines.len() as f32 * 15.0).max(24.0) + 12.0;
                     renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, block_h, 6.0, [74, 222, 128, 12]);
                     renderer.draw_text(pixmap, &text, 20.0, y + 6.0, w - 40.0, 10.0, t.success);
                     y += block_h + 4.0;
+                } else if let Some(err) = &result.error {
+                    let err_short = if err.len() > 60 { &err[..60] } else { err };
+                    renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, 28.0, 6.0, [248, 113, 113, 12]);
+                    renderer.draw_text(pixmap, err_short, 20.0, y + 7.0, w - 40.0, 10.0, t.error);
+                    y += 34.0;
                 }
             }
         }
@@ -350,7 +353,11 @@ impl Sidebar {
         mh += 12.0;
 
         // Description
-        let desc = plan.description.clone();
+        let desc = if plan.description.is_empty() {
+            plan.intent.clone()
+        } else {
+            plan.description.clone()
+        };
         let desc_h = renderer.draw_text(pixmap, &desc, mx + 16.0, my + mh, mw - 32.0, 12.0, t.text_secondary);
         mh += desc_h.max(18.0) + 8.0;
 
@@ -364,15 +371,28 @@ impl Sidebar {
         renderer.draw_text(pixmap, risk_label, mx + 24.0, my + mh + 5.0, 90.0, 10.0, risk_color);
         mh += 32.0;
 
-        // Steps
+        // Steps — show capability.action + params
         renderer.draw_text(pixmap, "PLANNED ACTIONS", mx + 16.0, my + mh, mw - 32.0, 9.0, t.text_muted);
         mh += 18.0;
 
         for (i, step) in plan.steps.iter().enumerate() {
-            let cmd = format!("{} {}", step.command, step.args.join(" "));
+            let action_label = format!("{}.{}", step.capability, step.action);
+            let params_str = if step.params.is_null() || step.params == serde_json::json!({}) {
+                String::new()
+            } else {
+                format!(" {}", step.params)
+            };
+
             renderer.fill_rounded_rect(pixmap, mx + 16.0, my + mh, mw - 32.0, 28.0, 6.0, [255, 255, 255, 6]);
             renderer.draw_text(pixmap, &format!("{}", i + 1), mx + 24.0, my + mh + 7.0, 12.0, 10.0, t.accent);
-            renderer.draw_text(pixmap, &cmd, mx + 40.0, my + mh + 7.0, mw - 72.0, 10.0, [196, 181, 253, 255]);
+            renderer.draw_text(pixmap, &action_label, mx + 40.0, my + mh + 7.0, mw - 72.0, 10.0, [196, 181, 253, 255]);
+
+            if !params_str.is_empty() {
+                mh += 30.0;
+                renderer.fill_rounded_rect(pixmap, mx + 32.0, my + mh, mw - 48.0, 22.0, 4.0, [255, 255, 255, 4]);
+                renderer.draw_text(pixmap, &params_str, mx + 40.0, my + mh + 5.0, mw - 64.0, 9.0, t.text_muted);
+            }
+
             mh += 34.0;
         }
 
@@ -394,4 +414,64 @@ impl Sidebar {
         renderer.fill_rounded_rect(pixmap, approve_x, btn_y, (mw - 40.0) / 2.0, 36.0, 8.0, t.accent);
         renderer.draw_text(pixmap, "Approve [⏎]", approve_x + 12.0, btn_y + 10.0, 100.0, 11.0, [255, 255, 255, 255]);
     }
+}
+
+/// Format CapabilityResult.data nicely for display
+fn format_capability_result(data: &serde_json::Value) -> String {
+    if data.is_null() {
+        return String::new();
+    }
+
+    // Try to extract common patterns
+    if let Some(entries) = data.get("entries").and_then(|v| v.as_array()) {
+        // File listing
+        let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let mut out = format!("{} items:\n", count);
+        for entry in entries.iter().take(8) {
+            let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let is_dir = entry.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
+            let icon = if is_dir { "📁" } else { "📄" };
+            out.push_str(&format!("  {} {}\n", icon, name));
+        }
+        if entries.len() > 8 {
+            out.push_str(&format!("  ... +{} more\n", entries.len() - 8));
+        }
+        return out;
+    }
+
+    if let Some(processes) = data.get("processes").and_then(|v| v.as_array()) {
+        // Process listing
+        let mut out = format!("{} processes:\n", processes.len());
+        for proc in processes.iter().take(8) {
+            let name = proc.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let pid = proc.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
+            out.push_str(&format!("  {} (PID {})\n", name, pid));
+        }
+        if processes.len() > 8 {
+            out.push_str(&format!("  ... +{} more\n", processes.len() - 8));
+        }
+        return out;
+    }
+
+    if let Some(hostname) = data.get("hostname").and_then(|v| v.as_str()) {
+        return format!("Hostname: {}", hostname);
+    }
+
+    if let Some(uptime) = data.get("uptime_human").and_then(|v| v.as_str()) {
+        return format!("Uptime: {}", uptime);
+    }
+
+    if let Some(content) = data.get("content").and_then(|v| v.as_str()) {
+        // File content
+        let lines: Vec<&str> = content.lines().take(8).collect();
+        return lines.join("\n");
+    }
+
+    // Fallback — compact JSON
+    serde_json::to_string_pretty(data)
+        .unwrap_or_else(|_| format!("{}", data))
+        .lines()
+        .take(8)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
