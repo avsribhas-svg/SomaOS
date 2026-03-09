@@ -196,20 +196,20 @@ impl Sidebar {
     //  Rendering
     // ──────────────────────────────────────────────
 
-    pub fn render(&mut self, renderer: &mut Renderer, pixmap: &mut Pixmap, height: f32) {
+    pub fn render(&mut self, renderer: &mut Renderer, pixmap: &mut Pixmap, ox: f32, height: f32) {
         let t = renderer.theme.clone();
         let w = SIDEBAR_WIDTH;
 
         // Background
-        renderer.fill_rect(pixmap, 0.0, 0.0, w, height, t.bg_sidebar);
-        renderer.fill_rect(pixmap, w - 1.0, 0.0, 1.0, height, t.border);
+        renderer.fill_rect(pixmap, ox, 0.0, w, height, t.bg_sidebar);
+        // Left border (sidebar is on the right)
+        renderer.fill_rect(pixmap, ox, 0.0, 1.0, height, t.border);
 
         // ─── Title Bar ───
-        renderer.fill_rect(pixmap, 0.0, 0.0, w, 48.0, [255, 255, 255, 5]);
-        renderer.fill_rect(pixmap, 0.0, 47.0, w, 1.0, t.border);
-        renderer.draw_text(pixmap, "◈", 16.0, 14.0, 30.0, 18.0, t.accent);
-        renderer.draw_text(pixmap, "SOMA", 38.0, 16.0, 80.0, 12.0, t.text_secondary);
-
+        renderer.fill_rect(pixmap, ox, 0.0, w, 48.0, [255, 255, 255, 5]);
+        renderer.fill_rect(pixmap, ox, 47.0, w, 1.0, t.border);
+        renderer.draw_text(pixmap, "◈", ox + 16.0, 14.0, 30.0, 18.0, t.accent);
+        renderer.draw_text(pixmap, "SOMA", ox + 38.0, 16.0, 80.0, 12.0, t.text_secondary);
         // Status indicator
         let status_color = match self.status {
             AgentStatus::Idle => t.success,
@@ -219,8 +219,8 @@ impl Sidebar {
             AgentStatus::Completed => t.success,
             AgentStatus::Error => t.error,
         };
-        renderer.fill_rounded_rect(pixmap, w - 130.0, 20.0, 6.0, 6.0, 3.0, status_color);
-        renderer.draw_text(pixmap, &format!("{}", self.status), w - 118.0, 17.0, 110.0, 10.0, status_color);
+        renderer.fill_rounded_rect(pixmap, ox + w - 130.0, 20.0, 6.0, 6.0, 3.0, status_color);
+        renderer.draw_text(pixmap, &format!("{}", self.status), ox + w - 118.0, 17.0, 110.0, 10.0, status_color);
 
         // ─── Content Area ───
         let content_y = 56.0;
@@ -229,10 +229,10 @@ impl Sidebar {
         // Welcome screen
         if self.messages.is_empty() {
             let cy = content_y + content_h / 2.0 - 70.0;
-            renderer.draw_text(pixmap, "◈", w / 2.0 - 15.0, cy, 40.0, 36.0, t.accent);
-            renderer.draw_text(pixmap, "Welcome to Soma", w / 2.0 - 75.0, cy + 50.0, 200.0, 16.0, t.text_primary);
-            renderer.draw_text(pixmap, "Describe what you want to do.", 28.0, cy + 78.0, w - 56.0, 11.0, t.text_muted);
-            renderer.draw_text(pixmap, "I'll create a plan for your approval.", 28.0, cy + 96.0, w - 56.0, 11.0, t.text_muted);
+            renderer.draw_text(pixmap, "◈", ox + w / 2.0 - 15.0, cy, 40.0, 36.0, t.accent);
+            renderer.draw_text(pixmap, "Welcome to Soma", ox + w / 2.0 - 75.0, cy + 50.0, 200.0, 16.0, t.text_primary);
+            renderer.draw_text(pixmap, "Describe what you want to do.", ox + 28.0, cy + 78.0, w - 56.0, 11.0, t.text_muted);
+            renderer.draw_text(pixmap, "I'll create a plan for your approval.", ox + 28.0, cy + 96.0, w - 56.0, 11.0, t.text_muted);
         } else {
             // Render chat messages with scrolling
             let mut y = content_y + 8.0;
@@ -274,18 +274,18 @@ impl Sidebar {
 
                 // Only render if visible
                 if msg_y + h >= content_y {
-                    self.render_message(renderer, pixmap, msg, msg_y, w, &t);
+                    self.render_message(renderer, pixmap, msg, msg_y, ox, w, &t);
                 }
             }
         }
 
         // ─── Input Area ───
         let input_y = height - 72.0;
-        renderer.fill_rect(pixmap, 0.0, input_y - 1.0, w, 1.0, t.border);
-        renderer.fill_rect(pixmap, 0.0, input_y, w, 72.0, [255, 255, 255, 5]);
+        renderer.fill_rect(pixmap, ox, input_y - 1.0, w, 1.0, t.border);
+        renderer.fill_rect(pixmap, ox, input_y, w, 72.0, [255, 255, 255, 5]);
 
-        renderer.fill_rounded_rect(pixmap, 12.0, input_y + 12.0, w - 64.0, 38.0, 10.0, t.bg_input);
-        renderer.stroke_rect(pixmap, 12.0, input_y + 12.0, w - 64.0, 38.0, t.border);
+        renderer.fill_rounded_rect(pixmap, ox + 12.0, input_y + 12.0, w - 64.0, 38.0, 10.0, t.bg_input);
+        renderer.stroke_rect(pixmap, ox + 12.0, input_y + 12.0, w - 64.0, 38.0, t.border);
 
         let display = if self.input_text.is_empty() {
             match self.status {
@@ -298,96 +298,67 @@ impl Sidebar {
             self.input_text.clone()
         };
         let text_color = if self.input_text.is_empty() { t.text_muted } else { t.text_primary };
-        renderer.draw_text(pixmap, &display, 22.0, input_y + 22.0, w - 90.0, 12.0, text_color);
+        renderer.draw_text(pixmap, &display, ox + 22.0, input_y + 22.0, w - 90.0, 12.0, text_color);
 
         // Send button
         let btn_color = if self.status == AgentStatus::AwaitingApproval { t.success } else { t.accent };
-        renderer.fill_rounded_rect(pixmap, w - 46.0, input_y + 14.0, 34.0, 34.0, 8.0, btn_color);
+        renderer.fill_rounded_rect(pixmap, ox + w - 46.0, input_y + 14.0, 34.0, 34.0, 8.0, btn_color);
         let btn_icon = if self.status == AgentStatus::AwaitingApproval { "✓" } else { "↑" };
-        renderer.draw_text(pixmap, btn_icon, w - 38.0, input_y + 22.0, 20.0, 16.0, [255, 255, 255, 255]);
+        renderer.draw_text(pixmap, btn_icon, ox + w - 38.0, input_y + 22.0, 20.0, 16.0, [255, 255, 255, 255]);
     }
 
-    fn render_message(&self, renderer: &mut Renderer, pixmap: &mut Pixmap, msg: &ChatMessage, y: f32, w: f32, t: &crate::renderer::Theme) {
+    fn render_message(&self, renderer: &mut Renderer, pixmap: &mut Pixmap, msg: &ChatMessage, y: f32, ox: f32, w: f32, t: &crate::renderer::Theme) {
         match msg {
             ChatMessage::UserInput { text } => {
-                // Right-aligned user bubble
                 let bubble_w = (w - 48.0).min(280.0);
-                let x = w - bubble_w - 12.0;
+                let x = ox + w - bubble_w - 12.0;
                 renderer.fill_rounded_rect(pixmap, x, y, bubble_w, 32.0, 12.0, t.accent);
                 let truncated = if text.len() > 50 { format!("{}…", &text[..50]) } else { text.clone() };
                 renderer.draw_text(pixmap, &truncated, x + 12.0, y + 9.0, bubble_w - 24.0, 11.0, [255, 255, 255, 255]);
             }
 
             ChatMessage::Thinking => {
-                // Inline thinking indicator
-                renderer.fill_rounded_rect(pixmap, 12.0, y, 160.0, 28.0, 8.0, t.bg_surface);
-                renderer.draw_text(pixmap, "● ● ●  Thinking…", 22.0, y + 7.0, 140.0, 11.0, t.accent);
+                renderer.fill_rounded_rect(pixmap, ox + 12.0, y, 160.0, 28.0, 8.0, t.bg_surface);
+                renderer.draw_text(pixmap, "● ● ●  Thinking…", ox + 22.0, y + 7.0, 140.0, 11.0, t.accent);
             }
 
             ChatMessage::PlanProposal { plan, .. } => {
-                // Left-aligned plan card
                 let card_w = w - 24.0;
                 let card_h = 24.0 + (plan.steps.len() as f32 * 26.0).max(26.0) + 16.0;
-
-                renderer.fill_rounded_rect(pixmap, 12.0, y, card_w, card_h, 10.0, t.bg_surface);
-
-                // Intent header
+                renderer.fill_rounded_rect(pixmap, ox + 12.0, y, card_w, card_h, 10.0, t.bg_surface);
                 let intent = if plan.description.is_empty() { &plan.intent } else { &plan.description };
-                let risk_color = match plan.risk_level {
-                    RiskLevel::Low => t.success,
-                    RiskLevel::Medium => t.warning,
-                    RiskLevel::High => t.error,
-                };
-
-                // Risk dot + intent text
-                renderer.fill_rounded_rect(pixmap, 20.0, y + 10.0, 6.0, 6.0, 3.0, risk_color);
+                let risk_color = match plan.risk_level { RiskLevel::Low => t.success, RiskLevel::Medium => t.warning, RiskLevel::High => t.error };
+                renderer.fill_rounded_rect(pixmap, ox + 20.0, y + 10.0, 6.0, 6.0, 3.0, risk_color);
                 let intent_short = if intent.len() > 45 { format!("{}…", &intent[..45]) } else { intent.clone() };
-                renderer.draw_text(pixmap, &intent_short, 32.0, y + 7.0, card_w - 44.0, 11.0, t.text_primary);
-
-                // Steps
+                renderer.draw_text(pixmap, &intent_short, ox + 32.0, y + 7.0, card_w - 44.0, 11.0, t.text_primary);
                 let mut sy = y + 28.0;
                 for (i, step) in plan.steps.iter().enumerate() {
                     let label = format!("{}  {}.{}", i + 1, step.capability, step.action);
-                    renderer.draw_text(pixmap, &label, 24.0, sy + 4.0, card_w - 36.0, 9.0, [196, 181, 253, 255]);
+                    renderer.draw_text(pixmap, &label, ox + 24.0, sy + 4.0, card_w - 36.0, 9.0, [196, 181, 253, 255]);
                     sy += 26.0;
                 }
             }
 
             ChatMessage::StepProgress { step_index, total_steps, result } => {
-                // Inline step result
                 let icon = if result.success { "✓" } else { "✗" };
                 let color = if result.success { t.success } else { t.error };
                 let label = format!("{} Step {}/{}", icon, step_index + 1, total_steps);
-
-                renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, 24.0, 6.0, [255, 255, 255, 4]);
-                renderer.draw_text(pixmap, &label, 20.0, y + 5.0, 120.0, 10.0, color);
-
-                // Compact result summary
+                renderer.fill_rounded_rect(pixmap, ox + 12.0, y, w - 24.0, 24.0, 6.0, [255, 255, 255, 4]);
+                renderer.draw_text(pixmap, &label, ox + 20.0, y + 5.0, 120.0, 10.0, color);
                 if result.success {
                     let summary = compact_result_summary(&result.data);
-                    renderer.draw_text(pixmap, &summary, 140.0, y + 5.0, w - 168.0, 9.0, t.text_muted);
+                    renderer.draw_text(pixmap, &summary, ox + 140.0, y + 5.0, w - 168.0, 9.0, t.text_muted);
                 }
             }
 
             ChatMessage::ExecutionDone { success_count, total, results } => {
-                // Results card
                 let mut card_h = 32.0_f32;
-                for r in results {
-                    if r.success {
-                        let lines = format_result_lines(&r.data);
-                        card_h += (lines.len() as f32 * 14.0).max(14.0) + 8.0;
-                    }
-                }
+                for r in results { if r.success { let lines = format_result_lines(&r.data); card_h += (lines.len() as f32 * 14.0).max(14.0) + 8.0; } }
                 card_h = card_h.min(250.0);
-
-                renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, card_h, 10.0, [74, 222, 128, 10]);
-
-                // Header
+                renderer.fill_rounded_rect(pixmap, ox + 12.0, y, w - 24.0, card_h, 10.0, [74, 222, 128, 10]);
                 let header = format!("Done — {}/{} succeeded", success_count, total);
                 let header_color = if *success_count == *total { t.success } else { t.warning };
-                renderer.draw_text(pixmap, &header, 20.0, y + 8.0, w - 44.0, 10.0, header_color);
-
-                // Result lines
+                renderer.draw_text(pixmap, &header, ox + 20.0, y + 8.0, w - 44.0, 10.0, header_color);
                 let mut ry = y + 28.0;
                 let max_ry = y + card_h - 8.0;
                 for r in results {
@@ -396,11 +367,11 @@ impl Sidebar {
                         let lines = format_result_lines(&r.data);
                         for line in lines.iter().take(8) {
                             if ry >= max_ry { break; }
-                            renderer.draw_text(pixmap, line, 20.0, ry, w - 44.0, 9.0, t.text_secondary);
+                            renderer.draw_text(pixmap, line, ox + 20.0, ry, w - 44.0, 9.0, t.text_secondary);
                             ry += 14.0;
                         }
                         if lines.len() > 8 {
-                            renderer.draw_text(pixmap, &format!("  +{} more…", lines.len() - 8), 20.0, ry, w - 44.0, 9.0, t.text_muted);
+                            renderer.draw_text(pixmap, &format!("  +{} more…", lines.len() - 8), ox + 20.0, ry, w - 44.0, 9.0, t.text_muted);
                             ry += 14.0;
                         }
                         ry += 4.0;
@@ -409,11 +380,10 @@ impl Sidebar {
             }
 
             ChatMessage::AgentError { message } => {
-                // Error card
-                renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, 40.0, 8.0, [248, 113, 113, 15]);
-                renderer.draw_text(pixmap, "⚠ Error", 20.0, y + 5.0, 80.0, 10.0, t.error);
+                renderer.fill_rounded_rect(pixmap, ox + 12.0, y, w - 24.0, 40.0, 8.0, [248, 113, 113, 15]);
+                renderer.draw_text(pixmap, "⚠ Error", ox + 20.0, y + 5.0, 80.0, 10.0, t.error);
                 let err_short = if message.len() > 55 { format!("{}…", &message[..55]) } else { message.clone() };
-                renderer.draw_text(pixmap, &err_short, 20.0, y + 21.0, w - 44.0, 9.0, t.error);
+                renderer.draw_text(pixmap, &err_short, ox + 20.0, y + 21.0, w - 44.0, 9.0, t.error);
             }
         }
     }

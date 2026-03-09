@@ -134,25 +134,25 @@ impl SomaApp {
         // Poll agent messages (no surface borrow here)
         let got_agent_msg = self.poll_agent_messages();
 
-        // Render sidebar
-        self.sidebar.render(&mut self.renderer, &mut pixmap, h);
-
-        // Render terminal
-        let term_x = SIDEBAR_WIDTH;
+        // Render terminal on the LEFT
         let term_w = (w - SIDEBAR_WIDTH).max(0.0);
         if term_w > 10.0 {
             self.terminal
-                .render(&mut self.renderer, &mut pixmap, term_x, 0.0, term_w, h);
+                .render(&mut self.renderer, &mut pixmap, 0.0, 0.0, term_w, h);
         }
+
+        // Render sidebar on the RIGHT
+        let sidebar_x = (w - SIDEBAR_WIDTH).max(0.0);
+        self.sidebar.render(&mut self.renderer, &mut pixmap, sidebar_x, h);
 
         // Focus indicator — highlight the border of the focused panel
         let focus_color = [129, 140, 248, 60]; // Subtle accent
         match self.focus {
             FocusPanel::Sidebar => {
-                self.renderer.fill_rect(&mut pixmap, 0.0, 0.0, 2.0, h, focus_color);
+                self.renderer.fill_rect(&mut pixmap, sidebar_x + SIDEBAR_WIDTH - 2.0, 0.0, 2.0, h, focus_color);
             }
             FocusPanel::Terminal => {
-                self.renderer.fill_rect(&mut pixmap, term_x, 0.0, 2.0, h, focus_color);
+                self.renderer.fill_rect(&mut pixmap, 0.0, 0.0, 2.0, h, focus_color);
             }
         }
 
