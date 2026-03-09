@@ -5,25 +5,50 @@ use tiny_skia::Pixmap;
 /// Sidebar panel width in pixels
 pub const SIDEBAR_WIDTH: f32 = 380.0;
 
-/// Maximum history entries to keep
-const MAX_HISTORY: usize = 50;
+const MAX_HISTORY: usize = 100;
 
-pub struct HistoryEntry {
-    pub input: String,
-    pub plan: Option<TaskPlan>,
-    pub results: Vec<CapabilityResult>,
-    pub approved: bool,
-    pub error: Option<String>,
+// ──────────────────────────────────────────────
+//  Chat message types
+// ──────────────────────────────────────────────
+
+#[derive(Clone)]
+pub enum ChatMessage {
+    /// User's natural language input
+    UserInput { text: String },
+    /// Agent thinking indicator
+    Thinking,
+    /// Agent returned a plan for approval
+    PlanProposal {
+        id: String,
+        plan: TaskPlan,
+    },
+    /// Step completed during execution
+    StepProgress {
+        step_index: usize,
+        total_steps: usize,
+        result: CapabilityResult,
+    },
+    /// All steps finished
+    ExecutionDone {
+        success_count: usize,
+        total: usize,
+        results: Vec<CapabilityResult>,
+    },
+    /// Error from agent
+    AgentError { message: String },
 }
+
+// ──────────────────────────────────────────────
+//  Sidebar state
+// ──────────────────────────────────────────────
 
 pub struct Sidebar {
     pub input_text: String,
     pub status: AgentStatus,
-    pub current_plan: Option<TaskPlan>,
     pub current_plan_id: Option<String>,
-    pub results: Vec<CapabilityResult>,
-    pub error: Option<String>,
-    pub history: Vec<HistoryEntry>,
+    pub current_plan: Option<TaskPlan>,
+    current_step_total: usize,
+    pub messages: Vec<ChatMessage>,
     pub scroll_offset: f32,
     pub cursor_visible: bool,
     cursor_timer: f32,
@@ -34,30 +59,38 @@ impl Sidebar {
         Self {
             input_text: String::new(),
             status: AgentStatus::Idle,
-            current_plan: None,
             current_plan_id: None,
-            results: Vec::new(),
-            error: None,
-            history: Vec::new(),
+            current_plan: None,
+            current_step_total: 0,
+            messages: Vec::new(),
             scroll_offset: 0.0,
             cursor_visible: true,
             cursor_timer: 0.0,
         }
     }
 
-    /// Handle a character input
     pub fn on_char(&mut self, c: char) {
-        if self.status == AgentStatus::Idle || self.status == AgentStatus::Completed || self.status == AgentStatus::Error {
+        if matches!(self.status, AgentStatus::Idle | AgentStatus::Completed | AgentStatus::Error) {
             self.input_text.push(c);
         }
     }
 
-    /// Handle backspace
     pub fn on_backspace(&mut self) {
         self.input_text.pop();
     }
 
-    /// Handle enter — returns a CompositorMessage to send to the agent if applicable
+    /// Scroll the sidebar
+    pub fn scroll(&mut self, delta: f32) {
+        self.scroll_offset = (self.scroll_offset - delta).max(0.0);
+    }
+
+    /// Scroll to bottom of conversation
+    pub fn scroll_to_bottom(&mut self) {
+        // Estimate content height (rough)
+        let estimated = self.messages.len() as f32 * 60.0;
+        self.scroll_offset = estimated.max(0.0);
+    }
+
     pub fn on_submit(&mut self) -> Option<CompositorMessage> {
         match self.status {
             AgentStatus::Idle | AgentStatus::Completed | AgentStatus::Error => {
@@ -65,97 +98,92 @@ impl Sidebar {
                 if text.is_empty() {
                     return None;
                 }
+                // Add user message
+                self.messages.push(ChatMessage::UserInput { text: text.clone() });
+                self.messages.push(ChatMessage::Thinking);
                 self.input_text.clear();
                 self.status = AgentStatus::Thinking;
-                self.error = None;
-                self.results.clear();
+                self.scroll_to_bottom();
 
                 Some(CompositorMessage::NaturalLanguageInput { text })
             }
-            AgentStatus::AwaitingApproval => {
-                self.on_approve()
-            }
+            AgentStatus::AwaitingApproval => self.on_approve(),
             _ => None,
         }
     }
 
-    /// Approve the current plan
     pub fn on_approve(&mut self) -> Option<CompositorMessage> {
         if let Some(id) = self.current_plan_id.take() {
             self.status = AgentStatus::Executing;
+            if let Some(plan) = &self.current_plan {
+                self.current_step_total = plan.steps.len();
+            }
             Some(CompositorMessage::Approve { id })
         } else {
             None
         }
     }
 
-    /// Reject the current plan (Escape key)
     pub fn on_reject(&mut self) -> Option<CompositorMessage> {
         if let Some(id) = self.current_plan_id.take() {
-            let plan = self.current_plan.take();
+            self.current_plan = None;
             self.status = AgentStatus::Idle;
-
-            self.history.push(HistoryEntry {
-                input: plan.as_ref().map(|p| p.intent.clone()).unwrap_or_default(),
-                plan,
-                results: vec![],
-                approved: false,
-                error: None,
-            });
-            if self.history.len() > MAX_HISTORY {
-                self.history.remove(0);
-            }
-
+            // Remove the thinking message if still there
+            self.messages.retain(|m| !matches!(m, ChatMessage::Thinking));
             Some(CompositorMessage::Reject { id })
         } else {
             None
         }
     }
 
-    /// Handle incoming agent message
     pub fn handle_agent_message(&mut self, msg: AgentMessage) {
         match msg {
             AgentMessage::TaskPlanReady { id, plan } => {
+                // Remove thinking indicator
+                self.messages.retain(|m| !matches!(m, ChatMessage::Thinking));
+                self.current_step_total = plan.steps.len();
+                self.messages.push(ChatMessage::PlanProposal { id: id.clone(), plan: plan.clone() });
                 self.status = AgentStatus::AwaitingApproval;
                 self.current_plan = Some(plan);
                 self.current_plan_id = Some(id);
+                self.scroll_to_bottom();
             }
-            AgentMessage::StepResult { result, .. } => {
-                self.results.push(result);
+            AgentMessage::StepResult { step_index, result, .. } => {
+                self.messages.push(ChatMessage::StepProgress {
+                    step_index,
+                    total_steps: self.current_step_total,
+                    result,
+                });
+                self.scroll_to_bottom();
             }
             AgentMessage::ExecutionComplete { results, .. } => {
                 self.status = AgentStatus::Completed;
-                let plan = self.current_plan.take();
-                self.history.push(HistoryEntry {
-                    input: plan.as_ref().map(|p| p.intent.clone()).unwrap_or_default(),
-                    plan,
-                    results: results.clone(),
-                    approved: true,
-                    error: None,
+                self.current_plan = None;
+                let ok = results.iter().filter(|r| r.success).count();
+                self.messages.push(ChatMessage::ExecutionDone {
+                    success_count: ok,
+                    total: results.len(),
+                    results,
                 });
-                if self.history.len() > MAX_HISTORY {
-                    self.history.remove(0);
-                }
-                self.results = results;
+                self.scroll_to_bottom();
             }
             AgentMessage::Error { message, .. } => {
+                self.messages.retain(|m| !matches!(m, ChatMessage::Thinking));
                 self.status = AgentStatus::Error;
-                self.error = Some(message.clone());
-                let plan = self.current_plan.take();
+                self.current_plan = None;
                 self.current_plan_id = None;
-                self.history.push(HistoryEntry {
-                    input: plan.as_ref().map(|p| p.intent.clone()).unwrap_or_default(),
-                    plan,
-                    results: vec![],
-                    approved: false,
-                    error: Some(message),
-                });
+                self.messages.push(ChatMessage::AgentError { message });
+                self.scroll_to_bottom();
             }
             _ => {}
         }
+
+        // Cap history
+        if self.messages.len() > MAX_HISTORY {
+            self.messages.drain(0..20);
+        }
     }
 
-    /// Update animations (cursor blink)
     pub fn update(&mut self, dt: f32) {
         self.cursor_timer += dt;
         if self.cursor_timer > 0.53 {
@@ -164,25 +192,25 @@ impl Sidebar {
         }
     }
 
-    /// Render the sidebar onto the pixmap
+    // ──────────────────────────────────────────────
+    //  Rendering
+    // ──────────────────────────────────────────────
+
     pub fn render(&mut self, renderer: &mut Renderer, pixmap: &mut Pixmap, height: f32) {
         let t = renderer.theme.clone();
         let w = SIDEBAR_WIDTH;
 
         // Background
         renderer.fill_rect(pixmap, 0.0, 0.0, w, height, t.bg_sidebar);
-        // Right border
         renderer.fill_rect(pixmap, w - 1.0, 0.0, 1.0, height, t.border);
 
         // ─── Title Bar ───
         renderer.fill_rect(pixmap, 0.0, 0.0, w, 48.0, [255, 255, 255, 5]);
         renderer.fill_rect(pixmap, 0.0, 47.0, w, 1.0, t.border);
-
-        // Logo
         renderer.draw_text(pixmap, "◈", 16.0, 14.0, 30.0, 18.0, t.accent);
         renderer.draw_text(pixmap, "SOMA", 38.0, 16.0, 80.0, 12.0, t.text_secondary);
 
-        // Status
+        // Status indicator
         let status_color = match self.status {
             AgentStatus::Idle => t.success,
             AgentStatus::Thinking => t.accent,
@@ -191,109 +219,64 @@ impl Sidebar {
             AgentStatus::Completed => t.success,
             AgentStatus::Error => t.error,
         };
-        renderer.fill_rounded_rect(pixmap, w - 130.0, 16.0, 6.0, 6.0, 3.0, status_color);
-        let status_str = format!("{}", self.status);
-        renderer.draw_text(pixmap, &status_str, w - 118.0, 13.0, 110.0, 10.0, status_color);
+        renderer.fill_rounded_rect(pixmap, w - 130.0, 20.0, 6.0, 6.0, 3.0, status_color);
+        renderer.draw_text(pixmap, &format!("{}", self.status), w - 118.0, 17.0, 110.0, 10.0, status_color);
 
         // ─── Content Area ───
         let content_y = 56.0;
-        let content_h = height - 56.0 - 80.0; // Between titlebar and input
-        let mut y = content_y + 8.0 - self.scroll_offset;
+        let content_h = height - 56.0 - 80.0;
 
         // Welcome screen
-        if self.history.is_empty() && self.status == AgentStatus::Idle && self.error.is_none() {
-            let cy = content_y + content_h / 2.0 - 60.0;
+        if self.messages.is_empty() {
+            let cy = content_y + content_h / 2.0 - 70.0;
             renderer.draw_text(pixmap, "◈", w / 2.0 - 15.0, cy, 40.0, 36.0, t.accent);
             renderer.draw_text(pixmap, "Welcome to Soma", w / 2.0 - 75.0, cy + 50.0, 200.0, 16.0, t.text_primary);
-            renderer.draw_text(
-                pixmap,
-                "Describe what you want to do.\nI'll create a plan for your approval.",
-                28.0,
-                cy + 80.0,
-                w - 56.0,
-                11.0,
-                t.text_muted,
-            );
+            renderer.draw_text(pixmap, "Describe what you want to do.", 28.0, cy + 78.0, w - 56.0, 11.0, t.text_muted);
+            renderer.draw_text(pixmap, "I'll create a plan for your approval.", 28.0, cy + 96.0, w - 56.0, 11.0, t.text_muted);
         } else {
-            // History entries
-            for entry in &self.history {
-                if y > content_y + content_h {
+            // Render chat messages with scrolling
+            let mut y = content_y + 8.0;
+            let scroll = self.scroll_offset;
+
+            // Calculate total content height for scroll clamping
+            let mut total_h = 0.0_f32;
+            for msg in &self.messages {
+                total_h += message_height(msg);
+            }
+
+            // Clamp scroll offset
+            let max_scroll = (total_h - content_h + 20.0).max(0.0);
+            self.scroll_offset = self.scroll_offset.min(max_scroll);
+            let scroll = self.scroll_offset;
+
+            // Auto-scroll: if near bottom, snap to bottom
+            if max_scroll - scroll < 30.0 {
+                self.scroll_offset = max_scroll;
+            }
+
+            // Start from scroll offset
+            let mut accumulated = 0.0_f32;
+            for msg in &self.messages {
+                let h = message_height(msg);
+                accumulated += h;
+
+                // Skip messages above viewport
+                if accumulated < scroll {
+                    continue;
+                }
+
+                let msg_y = y + accumulated - scroll - h;
+
+                // Skip messages below viewport
+                if msg_y > content_y + content_h {
                     break;
                 }
 
-                let icon = if entry.approved { "✓" } else { "✗" };
-                let icon_color = if entry.approved { t.success } else { t.warning };
-
-                // Input bubble
-                renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, 32.0, 6.0, t.bg_surface);
-                renderer.draw_text(pixmap, icon, 20.0, y + 8.0, 16.0, 12.0, icon_color);
-                let display_text = if entry.input.len() > 40 {
-                    format!("{}…", &entry.input[..40])
-                } else {
-                    entry.input.clone()
-                };
-                renderer.draw_text(pixmap, &display_text, 38.0, y + 9.0, w - 58.0, 11.0, t.text_primary);
-                y += 38.0;
-
-                // Results — display structured capability data
-                for result in &entry.results {
-                    if result.success {
-                        let display = format_capability_result(&result.data);
-                        let lines: Vec<&str> = display.lines().take(5).collect();
-                        let text = lines.join("\n");
-                        let block_h = (lines.len() as f32 * 15.0).max(24.0) + 12.0;
-                        renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, block_h, 6.0, [74, 222, 128, 12]);
-                        renderer.draw_text(pixmap, &text, 20.0, y + 6.0, w - 40.0, 10.0, t.success);
-                        y += block_h + 4.0;
-                    }
-                }
-
-                if let Some(err) = &entry.error {
-                    let err_short = if err.len() > 60 { &err[..60] } else { err };
-                    renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, 28.0, 6.0, [248, 113, 113, 12]);
-                    renderer.draw_text(pixmap, err_short, 20.0, y + 7.0, w - 40.0, 10.0, t.error);
-                    y += 34.0;
-                }
-
-                y += 4.0;
-            }
-
-            // Current results
-            for result in &self.results {
-                if y > content_y + content_h {
-                    break;
-                }
-                if result.success {
-                    let display = format_capability_result(&result.data);
-                    let lines: Vec<&str> = display.lines().take(8).collect();
-                    let text = lines.join("\n");
-                    let block_h = (lines.len() as f32 * 15.0).max(24.0) + 12.0;
-                    renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, block_h, 6.0, [74, 222, 128, 12]);
-                    renderer.draw_text(pixmap, &text, 20.0, y + 6.0, w - 40.0, 10.0, t.success);
-                    y += block_h + 4.0;
-                } else if let Some(err) = &result.error {
-                    let err_short = if err.len() > 60 { &err[..60] } else { err };
-                    renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, 28.0, 6.0, [248, 113, 113, 12]);
-                    renderer.draw_text(pixmap, err_short, 20.0, y + 7.0, w - 40.0, 10.0, t.error);
-                    y += 34.0;
+                // Only render if visible
+                if msg_y + h >= content_y {
+                    self.render_message(renderer, pixmap, msg, msg_y, w, &t);
                 }
             }
-        }
-
-        // ─── Thinking indicator ───
-        if self.status == AgentStatus::Thinking {
-            let ty = content_y + content_h / 2.0 - 12.0;
-            renderer.fill_rounded_rect(pixmap, 12.0, ty, w - 24.0, 32.0, 6.0, t.bg_surface);
-            renderer.draw_text(pixmap, "● ● ●  Analyzing…", 24.0, ty + 9.0, w - 48.0, 11.0, t.accent);
-        }
-
-        // ─── Error display ───
-        if let Some(err) = &self.error.clone() {
-            let ey = content_y + content_h - 50.0;
-            renderer.fill_rounded_rect(pixmap, 12.0, ey, w - 24.0, 44.0, 6.0, [248, 113, 113, 20]);
-            renderer.draw_text(pixmap, "⚠ Error", 20.0, ey + 4.0, 100.0, 10.0, t.error);
-            let err_short = if err.len() > 50 { &err[..50] } else { err };
-            renderer.draw_text(pixmap, err_short, 20.0, ey + 20.0, w - 40.0, 9.0, t.error);
         }
 
         // ─── Input Area ───
@@ -301,12 +284,14 @@ impl Sidebar {
         renderer.fill_rect(pixmap, 0.0, input_y - 1.0, w, 1.0, t.border);
         renderer.fill_rect(pixmap, 0.0, input_y, w, 72.0, [255, 255, 255, 5]);
 
-        // Input field
         renderer.fill_rounded_rect(pixmap, 12.0, input_y + 12.0, w - 64.0, 38.0, 10.0, t.bg_input);
         renderer.stroke_rect(pixmap, 12.0, input_y + 12.0, w - 64.0, 38.0, t.border);
 
         let display = if self.input_text.is_empty() {
-            "Describe what you want to do…".to_string()
+            match self.status {
+                AgentStatus::AwaitingApproval => "Press Enter to approve, Esc to reject".to_string(),
+                _ => "Ask me anything…".to_string(),
+            }
         } else if self.cursor_visible {
             format!("{}|", self.input_text)
         } else {
@@ -316,8 +301,121 @@ impl Sidebar {
         renderer.draw_text(pixmap, &display, 22.0, input_y + 22.0, w - 90.0, 12.0, text_color);
 
         // Send button
-        renderer.fill_rounded_rect(pixmap, w - 46.0, input_y + 14.0, 34.0, 34.0, 8.0, t.accent);
-        renderer.draw_text(pixmap, "↑", w - 38.0, input_y + 22.0, 20.0, 16.0, [255, 255, 255, 255]);
+        let btn_color = if self.status == AgentStatus::AwaitingApproval { t.success } else { t.accent };
+        renderer.fill_rounded_rect(pixmap, w - 46.0, input_y + 14.0, 34.0, 34.0, 8.0, btn_color);
+        let btn_icon = if self.status == AgentStatus::AwaitingApproval { "✓" } else { "↑" };
+        renderer.draw_text(pixmap, btn_icon, w - 38.0, input_y + 22.0, 20.0, 16.0, [255, 255, 255, 255]);
+    }
+
+    fn render_message(&self, renderer: &mut Renderer, pixmap: &mut Pixmap, msg: &ChatMessage, y: f32, w: f32, t: &crate::renderer::Theme) {
+        match msg {
+            ChatMessage::UserInput { text } => {
+                // Right-aligned user bubble
+                let bubble_w = (w - 48.0).min(280.0);
+                let x = w - bubble_w - 12.0;
+                renderer.fill_rounded_rect(pixmap, x, y, bubble_w, 32.0, 12.0, t.accent);
+                let truncated = if text.len() > 50 { format!("{}…", &text[..50]) } else { text.clone() };
+                renderer.draw_text(pixmap, &truncated, x + 12.0, y + 9.0, bubble_w - 24.0, 11.0, [255, 255, 255, 255]);
+            }
+
+            ChatMessage::Thinking => {
+                // Inline thinking indicator
+                renderer.fill_rounded_rect(pixmap, 12.0, y, 160.0, 28.0, 8.0, t.bg_surface);
+                renderer.draw_text(pixmap, "● ● ●  Thinking…", 22.0, y + 7.0, 140.0, 11.0, t.accent);
+            }
+
+            ChatMessage::PlanProposal { plan, .. } => {
+                // Left-aligned plan card
+                let card_w = w - 24.0;
+                let card_h = 24.0 + (plan.steps.len() as f32 * 26.0).max(26.0) + 16.0;
+
+                renderer.fill_rounded_rect(pixmap, 12.0, y, card_w, card_h, 10.0, t.bg_surface);
+
+                // Intent header
+                let intent = if plan.description.is_empty() { &plan.intent } else { &plan.description };
+                let risk_color = match plan.risk_level {
+                    RiskLevel::Low => t.success,
+                    RiskLevel::Medium => t.warning,
+                    RiskLevel::High => t.error,
+                };
+
+                // Risk dot + intent text
+                renderer.fill_rounded_rect(pixmap, 20.0, y + 10.0, 6.0, 6.0, 3.0, risk_color);
+                let intent_short = if intent.len() > 45 { format!("{}…", &intent[..45]) } else { intent.clone() };
+                renderer.draw_text(pixmap, &intent_short, 32.0, y + 7.0, card_w - 44.0, 11.0, t.text_primary);
+
+                // Steps
+                let mut sy = y + 28.0;
+                for (i, step) in plan.steps.iter().enumerate() {
+                    let label = format!("{}  {}.{}", i + 1, step.capability, step.action);
+                    renderer.draw_text(pixmap, &label, 24.0, sy + 4.0, card_w - 36.0, 9.0, [196, 181, 253, 255]);
+                    sy += 26.0;
+                }
+            }
+
+            ChatMessage::StepProgress { step_index, total_steps, result } => {
+                // Inline step result
+                let icon = if result.success { "✓" } else { "✗" };
+                let color = if result.success { t.success } else { t.error };
+                let label = format!("{} Step {}/{}", icon, step_index + 1, total_steps);
+
+                renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, 24.0, 6.0, [255, 255, 255, 4]);
+                renderer.draw_text(pixmap, &label, 20.0, y + 5.0, 120.0, 10.0, color);
+
+                // Compact result summary
+                if result.success {
+                    let summary = compact_result_summary(&result.data);
+                    renderer.draw_text(pixmap, &summary, 140.0, y + 5.0, w - 168.0, 9.0, t.text_muted);
+                }
+            }
+
+            ChatMessage::ExecutionDone { success_count, total, results } => {
+                // Results card
+                let mut card_h = 32.0_f32;
+                for r in results {
+                    if r.success {
+                        let lines = format_result_lines(&r.data);
+                        card_h += (lines.len() as f32 * 14.0).max(14.0) + 8.0;
+                    }
+                }
+                card_h = card_h.min(250.0);
+
+                renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, card_h, 10.0, [74, 222, 128, 10]);
+
+                // Header
+                let header = format!("Done — {}/{} succeeded", success_count, total);
+                let header_color = if *success_count == *total { t.success } else { t.warning };
+                renderer.draw_text(pixmap, &header, 20.0, y + 8.0, w - 44.0, 10.0, header_color);
+
+                // Result lines
+                let mut ry = y + 28.0;
+                let max_ry = y + card_h - 8.0;
+                for r in results {
+                    if ry >= max_ry { break; }
+                    if r.success {
+                        let lines = format_result_lines(&r.data);
+                        for line in lines.iter().take(8) {
+                            if ry >= max_ry { break; }
+                            renderer.draw_text(pixmap, line, 20.0, ry, w - 44.0, 9.0, t.text_secondary);
+                            ry += 14.0;
+                        }
+                        if lines.len() > 8 {
+                            renderer.draw_text(pixmap, &format!("  +{} more…", lines.len() - 8), 20.0, ry, w - 44.0, 9.0, t.text_muted);
+                            ry += 14.0;
+                        }
+                        ry += 4.0;
+                    }
+                }
+            }
+
+            ChatMessage::AgentError { message } => {
+                // Error card
+                renderer.fill_rounded_rect(pixmap, 12.0, y, w - 24.0, 40.0, 8.0, [248, 113, 113, 15]);
+                renderer.draw_text(pixmap, "⚠ Error", 20.0, y + 5.0, 80.0, 10.0, t.error);
+                let err_short = if message.len() > 55 { format!("{}…", &message[..55]) } else { message.clone() };
+                renderer.draw_text(pixmap, &err_short, 20.0, y + 21.0, w - 44.0, 9.0, t.error);
+            }
+        }
     }
 
     /// Render the HITL approval overlay
@@ -326,152 +424,194 @@ impl Sidebar {
             Some(p) => p.clone(),
             None => return,
         };
-
         let t = renderer.theme.clone();
 
         // Backdrop
         renderer.fill_rect(pixmap, 0.0, 0.0, width, height, [0, 0, 0, 150]);
 
-        // Modal
-        let mw = 340.0_f32.min(width - 40.0);
-        let mx = (width - mw) / 2.0;
-        let my = height / 2.0 - 160.0;
-        let mut mh = 0.0_f32;
+        // Dynamic modal height
+        let step_count = plan.steps.len().max(1);
+        let base_h = 180.0;
+        let steps_h = step_count as f32 * 50.0;
+        let mh = (base_h + steps_h).min(height - 60.0);
 
-        // Modal background
-        renderer.fill_rounded_rect(pixmap, mx, my, mw, 340.0, 14.0, [26, 26, 46, 250]);
-        renderer.stroke_rect(pixmap, mx, my, mw, 340.0, t.border);
+        let mw = 360.0_f32.min(width - 40.0);
+        let mx = (width - mw) / 2.0;
+        let my = (height - mh) / 2.0;
+
+        // Card
+        renderer.fill_rounded_rect(pixmap, mx, my, mw, mh, 16.0, [22, 22, 42, 250]);
+        renderer.stroke_rect(pixmap, mx, my, mw, mh, t.border);
 
         // Header
-        mh += 20.0;
-        renderer.draw_text(pixmap, "🛡️", mx + 16.0, my + mh, 24.0, 20.0, t.text_primary);
-        renderer.draw_text(pixmap, "Action Requires Approval", mx + 42.0, my + mh + 2.0, mw - 60.0, 13.0, t.text_primary);
-        mh += 32.0;
+        renderer.draw_text(pixmap, "Approve Action?", mx + 20.0, my + 18.0, mw - 40.0, 14.0, t.text_primary);
 
         // Divider
-        renderer.fill_rect(pixmap, mx + 16.0, my + mh, mw - 32.0, 1.0, t.border);
-        mh += 12.0;
+        renderer.fill_rect(pixmap, mx + 20.0, my + 44.0, mw - 40.0, 1.0, t.border);
 
-        // Description
-        let desc = if plan.description.is_empty() {
-            plan.intent.clone()
-        } else {
-            plan.description.clone()
-        };
-        let desc_h = renderer.draw_text(pixmap, &desc, mx + 16.0, my + mh, mw - 32.0, 12.0, t.text_secondary);
-        mh += desc_h.max(18.0) + 8.0;
+        // Intent description
+        let desc = if plan.description.is_empty() { &plan.intent } else { &plan.description };
+        renderer.draw_text(pixmap, desc, mx + 20.0, my + 56.0, mw - 40.0, 11.0, t.text_secondary);
 
         // Risk badge
         let (risk_color, risk_label) = match plan.risk_level {
-            RiskLevel::Low => (t.success, "✓ Low Risk"),
-            RiskLevel::Medium => (t.warning, "⚠ Medium Risk"),
-            RiskLevel::High => (t.error, "⛔ High Risk"),
+            RiskLevel::Low => (t.success, "Low Risk"),
+            RiskLevel::Medium => (t.warning, "Medium Risk"),
+            RiskLevel::High => (t.error, "High Risk"),
         };
-        renderer.fill_rounded_rect(pixmap, mx + 16.0, my + mh, 100.0, 22.0, 11.0, [255, 255, 255, 8]);
-        renderer.draw_text(pixmap, risk_label, mx + 24.0, my + mh + 5.0, 90.0, 10.0, risk_color);
-        mh += 32.0;
+        renderer.fill_rounded_rect(pixmap, mx + 20.0, my + 78.0, 90.0, 20.0, 10.0, [255, 255, 255, 8]);
+        renderer.draw_text(pixmap, risk_label, mx + 30.0, my + 82.0, 70.0, 10.0, risk_color);
 
-        // Steps — show capability.action + params
-        renderer.draw_text(pixmap, "PLANNED ACTIONS", mx + 16.0, my + mh, mw - 32.0, 9.0, t.text_muted);
-        mh += 18.0;
-
+        // Steps
+        let mut sy = my + 110.0;
         for (i, step) in plan.steps.iter().enumerate() {
-            let action_label = format!("{}.{}", step.capability, step.action);
-            let params_str = if step.params.is_null() || step.params == serde_json::json!({}) {
-                String::new()
-            } else {
-                format!(" {}", step.params)
-            };
+            if sy > my + mh - 60.0 { break; }
 
-            renderer.fill_rounded_rect(pixmap, mx + 16.0, my + mh, mw - 32.0, 28.0, 6.0, [255, 255, 255, 6]);
-            renderer.draw_text(pixmap, &format!("{}", i + 1), mx + 24.0, my + mh + 7.0, 12.0, 10.0, t.accent);
-            renderer.draw_text(pixmap, &action_label, mx + 40.0, my + mh + 7.0, mw - 72.0, 10.0, [196, 181, 253, 255]);
+            // Step number circle
+            renderer.fill_rounded_rect(pixmap, mx + 20.0, sy, 20.0, 20.0, 10.0, t.accent);
+            renderer.draw_text(pixmap, &format!("{}", i + 1), mx + 26.0, sy + 4.0, 10.0, 10.0, [255, 255, 255, 255]);
 
-            if !params_str.is_empty() {
-                mh += 30.0;
-                renderer.fill_rounded_rect(pixmap, mx + 32.0, my + mh, mw - 48.0, 22.0, 4.0, [255, 255, 255, 4]);
-                renderer.draw_text(pixmap, &params_str, mx + 40.0, my + mh + 5.0, mw - 64.0, 9.0, t.text_muted);
+            // Capability.action
+            let action = format!("{}.{}", step.capability, step.action);
+            renderer.draw_text(pixmap, &action, mx + 48.0, sy + 3.0, mw - 72.0, 10.0, [196, 181, 253, 255]);
+
+            // Params
+            if !step.params.is_null() && step.params != serde_json::json!({}) {
+                let params = format_params_inline(&step.params);
+                renderer.draw_text(pixmap, &params, mx + 48.0, sy + 20.0, mw - 72.0, 9.0, t.text_muted);
             }
 
-            mh += 34.0;
-        }
+            // Description
+            if !step.description.is_empty() {
+                renderer.draw_text(pixmap, &step.description, mx + 48.0, sy + 34.0, mw - 72.0, 9.0, t.text_secondary);
+            }
 
-        if plan.steps.is_empty() {
-            renderer.draw_text(pixmap, "No executable steps.", mx + 24.0, my + mh + 4.0, mw - 48.0, 10.0, t.text_muted);
-            let _ = mh; // suppress unused warning
+            sy += 50.0;
         }
 
         // Bottom buttons
-        let btn_y = my + 340.0 - 52.0;
-        renderer.fill_rect(pixmap, mx + 16.0, btn_y - 8.0, mw - 32.0, 1.0, t.border);
+        let btn_y = my + mh - 52.0;
+        renderer.fill_rect(pixmap, mx + 20.0, btn_y - 8.0, mw - 40.0, 1.0, t.border);
 
-        // Reject button
-        renderer.fill_rounded_rect(pixmap, mx + 16.0, btn_y, (mw - 40.0) / 2.0, 36.0, 8.0, [255, 255, 255, 12]);
-        renderer.draw_text(pixmap, "Reject [Esc]", mx + 28.0, btn_y + 10.0, 100.0, 11.0, t.text_secondary);
+        let half_w = (mw - 52.0) / 2.0;
+        // Reject
+        renderer.fill_rounded_rect(pixmap, mx + 20.0, btn_y, half_w, 36.0, 8.0, [255, 255, 255, 10]);
+        renderer.draw_text(pixmap, "✗ Reject  Esc", mx + 32.0, btn_y + 10.0, half_w - 16.0, 11.0, t.text_secondary);
 
-        // Approve button
-        let approve_x = mx + 24.0 + (mw - 40.0) / 2.0;
-        renderer.fill_rounded_rect(pixmap, approve_x, btn_y, (mw - 40.0) / 2.0, 36.0, 8.0, t.accent);
-        renderer.draw_text(pixmap, "Approve [⏎]", approve_x + 12.0, btn_y + 10.0, 100.0, 11.0, [255, 255, 255, 255]);
+        // Approve
+        let ax = mx + 28.0 + half_w;
+        renderer.fill_rounded_rect(pixmap, ax, btn_y, half_w, 36.0, 8.0, t.accent);
+        renderer.draw_text(pixmap, "✓ Approve  ⏎", ax + 12.0, btn_y + 10.0, half_w - 16.0, 11.0, [255, 255, 255, 255]);
     }
 }
 
-/// Format CapabilityResult.data nicely for display
-fn format_capability_result(data: &serde_json::Value) -> String {
-    if data.is_null() {
-        return String::new();
-    }
+// ──────────────────────────────────────────────
+//  Helpers
+// ──────────────────────────────────────────────
 
-    // Try to extract common patterns
+fn message_height(msg: &ChatMessage) -> f32 {
+    match msg {
+        ChatMessage::UserInput { .. } => 42.0,
+        ChatMessage::Thinking => 36.0,
+        ChatMessage::PlanProposal { plan, .. } => {
+            24.0 + (plan.steps.len() as f32 * 26.0).max(26.0) + 24.0
+        }
+        ChatMessage::StepProgress { .. } => 32.0,
+        ChatMessage::ExecutionDone { results, .. } => {
+            let mut h = 36.0_f32;
+            for r in results {
+                if r.success {
+                    let lines = format_result_lines(&r.data);
+                    h += (lines.len() as f32 * 14.0).min(120.0) + 8.0;
+                }
+            }
+            h.min(260.0)
+        }
+        ChatMessage::AgentError { .. } => 50.0,
+    }
+}
+
+fn compact_result_summary(data: &serde_json::Value) -> String {
+    if let Some(count) = data.get("count").and_then(|v| v.as_u64()) {
+        if data.get("entries").is_some() { return format!("{} items", count); }
+        if data.get("processes").is_some() { return format!("{} procs", count); }
+        if data.get("services").is_some() { return format!("{} svcs", count); }
+    }
+    if let Some(h) = data.get("hostname").and_then(|v| v.as_str()) { return h.to_string(); }
+    if let Some(u) = data.get("uptime_human").and_then(|v| v.as_str()) { return u.to_string(); }
+    "ok".to_string()
+}
+
+fn format_result_lines(data: &serde_json::Value) -> Vec<String> {
+    let mut lines = Vec::new();
+
     if let Some(entries) = data.get("entries").and_then(|v| v.as_array()) {
-        // File listing
-        let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-        let mut out = format!("{} items:\n", count);
-        for entry in entries.iter().take(8) {
-            let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-            let is_dir = entry.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
+        for e in entries.iter().take(12) {
+            let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let is_dir = e.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
             let icon = if is_dir { "📁" } else { "📄" };
-            out.push_str(&format!("  {} {}\n", icon, name));
+            lines.push(format!("  {} {}", icon, name));
         }
-        if entries.len() > 8 {
-            out.push_str(&format!("  ... +{} more\n", entries.len() - 8));
+        if entries.len() > 12 {
+            lines.push(format!("  … +{} more", entries.len() - 12));
         }
-        return out;
+        return lines;
     }
 
-    if let Some(processes) = data.get("processes").and_then(|v| v.as_array()) {
-        // Process listing
-        let mut out = format!("{} processes:\n", processes.len());
-        for proc in processes.iter().take(8) {
-            let name = proc.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-            let pid = proc.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
-            out.push_str(&format!("  {} (PID {})\n", name, pid));
+    if let Some(procs) = data.get("processes").and_then(|v| v.as_array()) {
+        for p in procs.iter().take(10) {
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let pid = p.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
+            let cpu = p.get("cpu_percent").and_then(|v| v.as_str()).unwrap_or("0");
+            lines.push(format!("  {} (PID {}) {}%", name, pid, cpu));
         }
-        if processes.len() > 8 {
-            out.push_str(&format!("  ... +{} more\n", processes.len() - 8));
-        }
-        return out;
+        return lines;
     }
 
-    if let Some(hostname) = data.get("hostname").and_then(|v| v.as_str()) {
-        return format!("Hostname: {}", hostname);
+    if let Some(h) = data.get("hostname").and_then(|v| v.as_str()) {
+        lines.push(format!("  Hostname: {}", h));
+        return lines;
     }
 
-    if let Some(uptime) = data.get("uptime_human").and_then(|v| v.as_str()) {
-        return format!("Uptime: {}", uptime);
+    if let Some(u) = data.get("uptime_human").and_then(|v| v.as_str()) {
+        lines.push(format!("  Uptime: {}", u));
+        return lines;
     }
 
     if let Some(content) = data.get("content").and_then(|v| v.as_str()) {
-        // File content
-        let lines: Vec<&str> = content.lines().take(8).collect();
-        return lines.join("\n");
+        for line in content.lines().take(10) {
+            lines.push(format!("  {}", line));
+        }
+        return lines;
     }
 
-    // Fallback — compact JSON
-    serde_json::to_string_pretty(data)
-        .unwrap_or_else(|_| format!("{}", data))
-        .lines()
-        .take(8)
-        .collect::<Vec<_>>()
-        .join("\n")
+    // Key-value fallback
+    if let Some(obj) = data.as_object() {
+        for (k, v) in obj.iter().take(10) {
+            let val = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            lines.push(format!("  {}: {}", k, val));
+        }
+    }
+
+    lines
+}
+
+fn format_params_inline(params: &serde_json::Value) -> String {
+    if let Some(obj) = params.as_object() {
+        let parts: Vec<String> = obj.iter().map(|(k, v)| {
+            let val = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            format!("{}={}", k, val)
+        }).collect();
+        parts.join("  ")
+    } else {
+        params.to_string()
+    }
 }

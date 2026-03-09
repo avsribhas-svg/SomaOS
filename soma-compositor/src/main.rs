@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use terminal::Terminal;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -72,11 +72,12 @@ impl SomaApp {
         }
     }
 
-    fn poll_agent_messages(&mut self) {
+    fn poll_agent_messages(&mut self) -> bool {
+        let mut got_message = false;
         if let Some(rx) = &self.agent_rx {
             if let Ok(mut rx) = rx.try_lock() {
                 while let Ok(msg) = rx.try_recv() {
-                    // Route DirectOutput to terminal, everything else to sidebar
+                    got_message = true;
                     match &msg {
                         soma_common::AgentMessage::DirectOutput { result, .. } => {
                             self.terminal.add_output(&result.stdout, &result.stderr);
@@ -87,6 +88,7 @@ impl SomaApp {
                 }
             }
         }
+        got_message
     }
 
     fn redraw(&mut self) {
@@ -130,7 +132,7 @@ impl SomaApp {
         self.terminal.update(1.0 / 60.0);
 
         // Poll agent messages (no surface borrow here)
-        self.poll_agent_messages();
+        let got_agent_msg = self.poll_agent_messages();
 
         // Render sidebar
         self.sidebar.render(&mut self.renderer, &mut pixmap, h);
@@ -171,6 +173,13 @@ impl SomaApp {
                     | (pixel.blue() as u32);
             }
             let _ = buffer.present();
+        }
+
+        // If agent sent messages, request another redraw to keep polling
+        if got_agent_msg {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
         }
     }
 }
@@ -221,10 +230,13 @@ impl ApplicationHandler for SomaApp {
 
             WindowEvent::RedrawRequested => {
                 self.redraw();
-                // Only request continuous redraw when animations are active
-                if self.sidebar.status == soma_common::AgentStatus::Thinking
-                    || self.sidebar.status == soma_common::AgentStatus::Executing
-                {
+                // Continuous redraw when agent is working or we're waiting for a response
+                let needs_poll = matches!(
+                    self.sidebar.status,
+                    soma_common::AgentStatus::Thinking
+                        | soma_common::AgentStatus::Executing
+                );
+                if needs_poll {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -295,6 +307,21 @@ impl ApplicationHandler for SomaApp {
                     _ => {}
                 }
 
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                let scroll_amount = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y * 40.0,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                };
+                // Scroll the focused panel
+                match self.focus {
+                    FocusPanel::Sidebar => self.sidebar.scroll(scroll_amount),
+                    FocusPanel::Terminal => {}, // TODO: terminal scroll
+                }
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
