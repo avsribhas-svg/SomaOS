@@ -221,9 +221,13 @@ impl ApplicationHandler for SomaApp {
 
             WindowEvent::RedrawRequested => {
                 self.redraw();
-                // Request continuous redraw for animations
-                if let Some(w) = &self.window {
-                    w.request_redraw();
+                // Only request continuous redraw when animations are active
+                if self.sidebar.status == soma_common::AgentStatus::Thinking
+                    || self.sidebar.status == soma_common::AgentStatus::Executing
+                {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
                 }
             }
 
@@ -269,6 +273,13 @@ impl ApplicationHandler for SomaApp {
                     Key::Named(NamedKey::Escape) => {
                         if let Some(msg) = self.sidebar.on_reject() {
                             self.send_to_agent(msg);
+                        }
+                    }
+
+                    Key::Named(NamedKey::Space) => {
+                        match self.focus {
+                            FocusPanel::Sidebar => self.sidebar.on_char(' '),
+                            FocusPanel::Terminal => self.terminal.on_char(' '),
                         }
                     }
 
