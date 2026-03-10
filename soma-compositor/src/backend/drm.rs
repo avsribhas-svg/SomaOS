@@ -9,7 +9,7 @@
 use drm::control::{
     connector,
     crtc,
-    dumbbuffer::{DumbBuffer, DumbMapping},
+    dumbbuffer::DumbBuffer,
     Device as CtrlDevice,
 };
 use drm::Device;
@@ -46,10 +46,8 @@ pub struct DrmDisplay {
     pub height: u32,
     /// Front buffer (currently displayed)
     front: DumbBuffer,
-    front_map: DumbMapping<'static>,
     /// Back buffer (we render into this)
     back: DumbBuffer,
-    back_map: DumbMapping<'static>,
     /// Framebuffer handles for each dumb buffer
     front_fb: drm::control::framebuffer::Handle,
     back_fb: drm::control::framebuffer::Handle,
@@ -128,14 +126,6 @@ impl DrmDisplay {
             .create_dumb_buffer((width, height), drm::buffer::DrmFourcc::Xrgb8888, 32)
             .map_err(|e| format!("Cannot create back dumb buffer: {}", e))?;
 
-        // Map both into process memory
-        let front_map = card
-            .map_dumb_buffer(&mut front)
-            .map_err(|e| format!("Cannot map front buffer: {}", e))?;
-        let back_map = card
-            .map_dumb_buffer(&mut back)
-            .map_err(|e| format!("Cannot map back buffer: {}", e))?;
-
         // Create framebuffer objects
         let front_fb = card
             .add_framebuffer(&front, 24, 32)
@@ -162,9 +152,7 @@ impl DrmDisplay {
             width,
             height,
             front,
-            front_map,
             back,
-            back_map,
             front_fb,
             back_fb,
             saved_crtc,
@@ -184,7 +172,15 @@ impl DrmDisplay {
 
         // Convert RGBA → XRGB8888 and write into back buffer
         {
-            let dst = self.back_map.as_mut();
+            let mut back_map = self
+                .card
+                .map_dumb_buffer(&mut self.back)
+                .map_err(|e| format!("Cannot map back buffer: {}", e))
+                .ok();
+            let Some(ref mut back_map) = back_map else {
+                return;
+            };
+            let dst = back_map.as_mut();
             for i in 0..(w * h) {
                 let r = rgba_pixels[i * 4] as u32;
                 let g = rgba_pixels[i * 4 + 1] as u32;
@@ -211,7 +207,6 @@ impl DrmDisplay {
 
         // Swap handles so next frame writes to the other buffer
         std::mem::swap(&mut self.front, &mut self.back);
-        std::mem::swap(&mut self.front_map, &mut self.back_map);
         std::mem::swap(&mut self.front_fb, &mut self.back_fb);
     }
 }
