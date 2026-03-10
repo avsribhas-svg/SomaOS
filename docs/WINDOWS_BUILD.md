@@ -1,196 +1,289 @@
-# Building SomaOS on Windows
+# Building and Running SomaOS on Windows (VirtualBox)
 
-Step-by-step guide to build and run SomaOS on your Windows laptop using WSL2 + Docker.
+Complete guide for building the SomaOS v0.8 image inside WSL2 and running it as a new VirtualBox VM on Windows.
+
+---
+
+## Overview
+
+The build runs entirely inside **WSL2** (where Docker is already set up). The output is a `.vdi` disk image you import into VirtualBox as a brand new VM.
+
+```
+WSL2 (builder)               Windows host
+──────────────               ──────────────
+git clone repo
+./buildroot/build.sh  ──→  soma-os.img
+VBoxManage convertfromraw ──→  soma-os.vdi ──→  New VirtualBox VM
+```
 
 ---
 
 ## Prerequisites
 
-### 1. Install WSL2
+Inside WSL2:
+- Docker installed and running (`docker run hello-world` works)
+- Git
 
-Open **PowerShell as Administrator** and run:
-```powershell
-wsl --install
-```
-Restart your computer when prompted. After restart, WSL will finish setup and ask you to create a Linux username/password.
-
-### 2. Install Docker Desktop
-
-1. Download from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/)
-2. Install and launch Docker Desktop
-3. In Settings → General → ensure **"Use the WSL 2 based engine"** is checked
-4. In Settings → Resources → WSL Integration → enable for your distro (Ubuntu)
-
-### 3. Install VirtualBox (for running the image)
-
-Download from [virtualbox.org](https://www.virtualbox.org/wiki/Downloads) → "Windows hosts"
+On your Windows host:
+- VirtualBox installed
 
 ---
 
-## Build the Image
+## Step 1 — Get the Code
 
-### Clone the repo
-
-Open **WSL2 terminal** (search "Ubuntu" in Start menu):
+Open your **WSL2 terminal**:
 
 ```bash
-cd ~
-git clone https://github.com/<your-username>/somaos.git
-cd somaos
+git clone https://github.com/avsribhas-svg/SomaOS.git
+cd SomaOS
 ```
 
-### Build (one command)
+---
+
+## Step 2 — Build the OS Image
 
 ```bash
 cd buildroot
 ./build.sh
 ```
 
-This will:
-1. **Cross-compile** the Rust binaries (`soma-agent`, `soma-compositor`) inside Docker
-2. **Build** the full Linux image via Buildroot (~30 min on native x86_64)
-3. **Output** the image to `buildroot/output/soma-os.img`
+**What this does:**
 
-> **Note**: The first build downloads ~1GB of source tarballs (GCC, kernel, glibc, Mesa, etc.). 
-> Subsequent builds reuse the cache and are much faster.
+1. **Cross-compiles Rust binaries** inside a Docker container (`rust:latest` with musl):
+   - `soma-agent` — agent daemon (default features)
+   - `soma-compositor` — compositor with `--no-default-features --features drm-backend` (DRM/KMS, no winit)
+   - `soma-cli` — terminal test client
+   - Copies binaries to `buildroot/overlay/usr/bin/`
+
+2. **Builds the full Linux image** via Buildroot inside Docker:
+   - Downloads Linux kernel, GRUB2, systemd, Mesa, ALSA (~1 GB sources, cached after first run)
+   - Compiles everything into a 4 GB ext4 disk image
+   - Runs `post-build.sh` to install systemd services and first-boot scripts
+
+3. **Outputs** to `buildroot/output/`:
+   - `soma-os.img` — raw disk image (bootable)
+   - `bzImage` — Linux kernel (for reference)
+
+> **Time**: ~40 min first build. Subsequent builds are fast if only Rust code changed — run `./build.sh --rust-only` then `./build.sh --image-only`.
 
 ---
 
-## Run in VirtualBox
+## Step 3 — Convert to VDI
 
-### Convert the image
+Still inside WSL2, copy the image to a Windows-accessible path and convert:
 
-In WSL2:
 ```bash
-# Convert raw image to VDI format for VirtualBox
-# First, find where VirtualBox is installed
-VBoxManage="/mnt/c/Program Files/Oracle/VirtualBox/VBoxManage.exe"
-
-# Copy the image to a Windows-accessible location
+# Copy raw image to your Windows Desktop
 cp buildroot/output/soma-os.img /mnt/c/Users/$USER/Desktop/soma-os.img
-
-# Convert (run from PowerShell or CMD instead)
 ```
 
-In **PowerShell**:
+Then open **PowerShell** (not WSL2) and run:
+
 ```powershell
 cd "$env:USERPROFILE\Desktop"
 & "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" convertfromraw soma-os.img soma-os.vdi --format VDI
 ```
 
-### Create the VM
+This produces `soma-os.vdi` (~4 GB) on your Desktop.
 
-1. Open **VirtualBox** → click **New**
-2. **Name**: SomaOS
-3. **Type**: Linux
-4. **Version**: Other Linux (64-bit)
-5. Click **Next**
+---
 
-6. **Memory**: 2048 MB (2 GB minimum)
-7. **Processors**: 2
+## Step 4 — Create New VirtualBox VM on Windows
 
-8. **Hard disk**: "Use an existing virtual hard disk file"
-   → Browse → select `soma-os.vdi` from your Desktop
+Open **VirtualBox** → click **New**.
 
-9. Click **Finish**
+### Wizard settings
 
-### Configure the VM
+| Field | Value |
+|-------|-------|
+| Name | SomaOS v0.8 |
+| Type | Linux |
+| Version | Other Linux (64-bit) |
+| Memory | **4096 MB** |
+| Hard disk | **Use an existing virtual hard disk file** |
+| → Browse | select `soma-os.vdi` from Desktop |
 
-Right-click SomaOS → **Settings**:
+Click **Finish**.
 
-| Tab | Setting | Value |
-|-----|---------|-------|
-| **System → Processor** | Processors | 2 |
-| **Display** | Video Memory | 128 MB |
-| **Display** | Graphics Controller | VMSVGA |
-| **Network** | Attached to | NAT |
-| **Serial Ports → Port 1** | Enable | ✓ |
-| **Serial Ports → Port 1** | Port Mode | Raw File |
-| **Serial Ports → Port 1** | Path | `C:\Users\<you>\soma-serial.log` |
+### Configure before booting
 
-### Boot
+Right-click **SomaOS v0.8** → **Settings**:
 
-Click **Start**. You should see:
-1. GRUB bootloader (auto-selects after 3 seconds)
-2. Linux kernel boot messages
-3. systemd startup
-4. Auto-login as root
-5. The SomaOS welcome banner:
+**Display tab** — this is critical for DRM/KMS:
+
+| Setting | Value |
+|---------|-------|
+| Graphics Controller | **VMSVGA** |
+| Video Memory | **128 MB** |
+| Enable 3D Acceleration | ✓ checked |
+
+> VMSVGA exposes `/dev/dri/card0` via the `vmwgfx` kernel driver, which the DRM compositor requires. VBoxVGA does not work.
+
+**System → Processor tab:**
+
+| Setting | Value |
+|---------|-------|
+| Processors | 2 |
+
+**Network tab:**
+
+| Setting | Value |
+|---------|-------|
+| Adapter 1 | NAT |
+
+NAT is needed so the first-boot service can download the Ollama model.
+
+**Serial Ports → Port 1** (optional but useful for debug):
+
+| Setting | Value |
+|---------|-------|
+| Enable Serial Port | ✓ |
+| Port Mode | Raw File |
+| Path | `C:\Users\<you>\soma-serial.log` |
+
+---
+
+## Step 5 — Boot
+
+Click **Start**.
+
+### Expected boot sequence
 
 ```
-  ╔══════════════════════════════════════════╗
-  ║         Welcome to SomaOS v0.1.0        ║
-  ║                                          ║
-  ║  AI-Native Operating System for Agents   ║
-  ║                                          ║
-  ║  • soma-agent: running as systemd svc    ║
-  ║  • To start compositor: soma-compositor  ║
-  ║                                          ║
-  ╚══════════════════════════════════════════╝
+GRUB bootloader (auto-selects after 3 sec)
+  └→ Linux kernel
+       └→ systemd
+            ├→ soma-ollama.service    — Ollama LLM server starts
+            ├→ soma-agent.service     — Agent daemon (waits for Ollama)
+            ├→ soma-first-boot.service — (first boot only) pulls qwen2.5-coder:7b
+            └→ soma-compositor.service — Compositor takes over tty1
+                  └→ [Login screen appears on the VM display]
 ```
 
-### First commands
+### Login
+
+Type `soma` and press **Enter**.
+
+The compositor UI loads: PTY terminal on the left, chat sidebar on the right.
+
+---
+
+## First Boot — Model Download
+
+On the **very first boot**, `soma-first-boot.service` runs in the background and pulls `qwen2.5-coder:7b` (~4 GB). This takes 5–15 minutes depending on your connection.
+
+**During this time:**
+- The compositor UI is fully usable
+- The terminal and sidebar work
+- Agent tasks will fail until the model finishes downloading
+
+**Watch the download progress:**
+
+Press `Right Ctrl + F2` in VirtualBox to switch to a text console:
+```bash
+journalctl -f -u soma-first-boot
+```
+
+Press `Right Ctrl + F1` to return to the compositor display.
+
+Once the download finishes you'll see a success toast in the compositor.
+
+---
+
+## Keyboard Shortcuts Inside the Compositor
+
+| Key | Action |
+|-----|--------|
+| `F1` | Toggle focus between terminal (left) and sidebar (right) |
+| `Enter` | Submit command (sidebar) / confirm shell input (terminal) |
+| `Escape` | Reject a pending HITL approval |
+| `Tab` | Shell completion (terminal) / switch to terminal (sidebar) |
+| `Ctrl+C` | Interrupt running process (terminal) |
+| `Ctrl+D` | EOF / logout (terminal) |
+| `Ctrl+L` | Clear terminal |
+| `Right Ctrl + F2` | Switch to debug console (VirtualBox) |
+
+Scroll with mouse wheel or trackpad in either panel.
+
+Click any **result card** or **error card** in the sidebar to open a full detail modal. Click anywhere to dismiss.
+
+---
+
+## Rebuilding After Code Changes
+
+For iterative development, you don't need to rebuild the full image every time:
 
 ```bash
-# Check the agent daemon is running
-systemctl status soma-agent
+# In WSL2 — recompile Rust only (~2 min)
+./build.sh --rust-only
 
-# Start the compositor (requires DRM/KMS — may need framebuffer mode)
-soma-compositor
+# Then rebuild image with new binaries (~5 min, uses cached Buildroot)
+./build.sh --image-only
 
-# Or use the terminal directly
-ls /
-uname -a
+# Re-convert and replace the VDI
+cp buildroot/output/soma-os.img /mnt/c/Users/$USER/Desktop/soma-os.img
+```
+
+Then in PowerShell:
+```powershell
+cd "$env:USERPROFILE\Desktop"
+Remove-Item soma-os.vdi -ErrorAction SilentlyContinue
+& "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" convertfromraw soma-os.img soma-os.vdi --format VDI
+```
+
+Delete the old VirtualBox VM (Machine → Remove → Delete all files), then create a new one pointing to the updated VDI.
+
+For the fastest iteration — copy binaries directly into a running VM over SSH:
+
+```bash
+# In WSL2
+./build.sh --rust-only
+
+# Find the VM's IP: in the VM console → ip addr show
+scp buildroot/overlay/usr/bin/soma-compositor root@<VM-IP>:/usr/bin/
+scp buildroot/overlay/usr/bin/soma-agent root@<VM-IP>:/usr/bin/
+
+# Restart services
+ssh root@<VM-IP> "systemctl restart soma-agent soma-compositor"
 ```
 
 ---
 
-## Alternative: Run in QEMU (Windows)
+## Changing the Login Password
 
-If you prefer QEMU over VirtualBox:
+The default password is `soma`. To change it, edit the overlay before building:
 
-1. Install QEMU: [qemu.weilnetz.de](https://qemu.weilnetz.de/w64/)
-2. In PowerShell:
-```powershell
-qemu-system-x86_64.exe -m 2G -smp 2 `
-  -drive file=soma-os.img,format=raw `
-  -device virtio-gpu-pci `
-  -device virtio-keyboard-pci `
-  -device virtio-mouse-pci `
-  -display sdl `
-  -serial stdio `
-  -net nic -net user
+```bash
+echo "yournewpassword" > buildroot/overlay/etc/soma/passwd
+./build.sh --image-only
 ```
 
 ---
 
 ## Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| `build.sh: Permission denied` | Run `chmod +x buildroot/build.sh buildroot/post-build.sh` |
-| Docker not found in WSL2 | Ensure Docker Desktop → Settings → WSL Integration is enabled |
-| VirtualBox black screen | Try VBoxSVGA or VMSVGA graphics controller |
-| No network in VM | Use NAT adapter; run `dhcpcd` after boot |
-| Compositor doesn't start | Expected in v0.1 — requires DRM device. Use the CLI shell. |
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Black screen after boot | Wrong graphics controller | VM Settings → Display → set **VMSVGA**, not VBoxVGA |
+| `No DRM card found` in journal | vmwgfx driver not loaded | Ensure VMSVGA + 3D Acceleration enabled; check `dmesg \| grep vmwgfx` |
+| Login screen appears but keyboard doesn't work | evdev device not found | Check `ls /dev/input/` — should have `event0`, `event1` |
+| Agent tasks fail with "model not found" | First-boot pull incomplete | Wait for `soma-first-boot.service`; watch: `journalctl -f -u soma-first-boot` |
+| `build.sh: Permission denied` | Script not executable | `chmod +x buildroot/build.sh buildroot/post-build.sh` |
+| Docker not found in WSL2 | Docker Desktop WSL integration off | Docker Desktop → Settings → Resources → WSL Integration → enable your distro |
+| `VBoxManage` not found in WSL2 | Use PowerShell for conversion | Run the `VBoxManage.exe` command in PowerShell, not WSL2 |
+| No network in VM after boot | DHCP not started | `systemctl status dhcpcd` — should auto-start with NAT adapter |
+| soma-compositor crashes immediately | Service error | `journalctl -u soma-compositor -n 50` for details |
 
 ---
 
 ## Development Workflow
 
-After initial setup, your workflow is:
-
 ```
-Edit code (any machine)
+Edit code (Mac or Windows)
   → git push
-    → Windows WSL2: git pull && cd buildroot && ./build.sh
-      → VirtualBox: boot soma-os.vdi
-```
-
-For rapid iteration, you can also cross-compile just the Rust binaries and scp them into the running VM:
-
-```bash
-# In WSL2
-./buildroot/build.sh --rust-only
-scp buildroot/overlay/usr/bin/soma-* root@<VM-IP>:/usr/bin/
+    → WSL2: git pull
+      → cd buildroot && ./build.sh
+        → cp soma-os.img /mnt/c/Users/$USER/Desktop/
+          → PowerShell: VBoxManage convertfromraw ...
+            → VirtualBox: new VM → attach VDI → Start
 ```
