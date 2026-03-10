@@ -1,3 +1,4 @@
+use base64;
 use serde_json::{json, Value};
 use soma_common::{ActionSchema, CapabilityResult};
 use std::fs;
@@ -145,6 +146,30 @@ impl FileSystemCapability {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
+
+        // Detect image extensions — return base64-encoded bytes instead of text
+        let ext = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if ["png", "jpg", "jpeg", "gif", "bmp", "webp"].contains(&ext.as_str()) {
+            return match fs::read(path) {
+                Ok(bytes) => {
+                    use base64::Engine;
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    ok(json!({
+                        "type": "image_base64",
+                        "path": path,
+                        "data": encoded,
+                        "mime": format!("image/{}", ext),
+                        "bytes": bytes.len(),
+                    }))
+                }
+                Err(e) => err(&format!("Cannot read file '{}': {}", path, e)),
+            };
+        }
+
         let max_lines = params.get("lines").and_then(|v| v.as_u64());
 
         match fs::read_to_string(path) {
@@ -158,7 +183,8 @@ impl FileSystemCapability {
                     None => content,
                 };
                 let line_count = output.lines().count();
-                ok(json!({ "path": path, "content": output, "lines": line_count }))
+                let byte_size = output.len();
+                ok(json!({ "path": path, "content": output, "lines": line_count, "bytes": byte_size }))
             }
             Err(e) => err(&format!("Cannot read file '{}': {}", path, e)),
         }

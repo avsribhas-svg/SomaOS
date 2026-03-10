@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use soma_common::{AgentMessage, AgentStatus, CapabilityResult, CompositorMessage, TaskPlan, RiskLevel};
 use crate::renderer::Renderer;
 use tiny_skia::Pixmap;
@@ -11,6 +12,13 @@ const MSG_PAD: f32 = 8.0;  // Padding between messages
 // ──────────────────────────────────────────────
 //  Chat message types
 // ──────────────────────────────────────────────
+
+/// Decoded image thumbnail ready for tiny-skia rendering (premultiplied RGBA)
+#[derive(Clone)]
+pub enum PreviewData {
+    None,
+    Image { pixels: Vec<u8>, width: u32, height: u32 },
+}
 
 #[derive(Clone)]
 pub enum ChatMessage {
@@ -26,6 +34,7 @@ pub enum ChatMessage {
         success_count: usize,
         total: usize,
         results: Vec<CapabilityResult>,
+        preview: PreviewData,
     },
     AgentError { message: String },
 }
@@ -135,11 +144,13 @@ impl Sidebar {
                 self.status = AgentStatus::Completed;
                 self.current_plan = None;
                 let ok = results.iter().filter(|r| r.success).count();
+                let preview = decode_image_preview(&results);
                 self.messages.push(ChatMessage::ExecutionDone {
                     intent,
                     success_count: ok,
                     total: results.len(),
                     results,
+                    preview,
                 });
                 self.scroll_to_bottom();
             }
@@ -306,23 +317,28 @@ impl Sidebar {
                 }
             }
 
-            ChatMessage::ExecutionDone { intent, success_count, total, results } => {
-                // Compute lines to show
+            ChatMessage::ExecutionDone { intent, success_count, total, results, preview } => {
                 let result_lines = format_all_results(results);
-                let visible_lines: Vec<&str> = result_lines.iter().map(|s| s.as_str()).take(12).collect();
-                let more_count = if result_lines.len() > 12 { result_lines.len() - 12 } else { 0 };
+                let visible_lines: Vec<&str> = result_lines.iter().map(|s| s.as_str()).take(15).collect();
+                let more_count = result_lines.len().saturating_sub(15);
+
+                let (thumb_w, thumb_h) = match preview {
+                    PreviewData::Image { width, height, .. } => (*width as f32, *height as f32),
+                    PreviewData::None => (0.0, 0.0),
+                };
 
                 let header_h = 28.0;
+                let thumb_section_h = if thumb_h > 0.0 { thumb_h + 10.0 } else { 0.0 };
                 let lines_h = visible_lines.len() as f32 * 15.0;
                 let more_h = if more_count > 0 { 15.0 } else { 0.0 };
-                let card_h = header_h + lines_h + more_h + 8.0;
+                let card_h = header_h + thumb_section_h + lines_h + more_h + 8.0;
                 let card_w = w - 20.0;
 
                 // Card background
                 let bg = if *success_count == *total { [74, 222, 128, 12] } else { [248, 113, 113, 12] };
                 renderer.fill_rounded_rect(pixmap, ox + 10.0, y, card_w, card_h, 8.0, bg);
 
-                // Header: "v Done — intent (1/1)"
+                // Header
                 let icon = if *success_count == *total { "v" } else { "!" };
                 let header_color = if *success_count == *total { t.success } else { t.warning };
                 let header = format!("{} {} ({}/{})", icon, truncate_str(intent, 30), success_count, total);
@@ -331,14 +347,40 @@ impl Sidebar {
                 // Divider
                 renderer.fill_rect(pixmap, ox + 18.0, y + 24.0, card_w - 24.0, 1.0, [255, 255, 255, 12]);
 
-                // Result lines
                 let mut ry = y + header_h + 2.0;
+
+                // Image thumbnail
+                if let PreviewData::Image { pixels, width, height } = preview {
+                    if let Some(mut thumb) = tiny_skia::Pixmap::new(*width, *height) {
+                        if thumb.data_mut().len() == pixels.len() {
+                            thumb.data_mut().copy_from_slice(pixels);
+                            // Draw a subtle border around the thumbnail
+                            renderer.fill_rounded_rect(
+                                pixmap,
+                                ox + 16.0, ry - 2.0,
+                                thumb_w + 4.0, thumb_h + 4.0,
+                                4.0, [255, 255, 255, 8],
+                            );
+                            pixmap.draw_pixmap(
+                                (ox + 18.0) as i32,
+                                ry as i32,
+                                thumb.as_ref(),
+                                &tiny_skia::PixmapPaint::default(),
+                                tiny_skia::Transform::identity(),
+                                None,
+                            );
+                        }
+                    }
+                    ry += thumb_h + 10.0;
+                }
+
+                // Result text lines
                 for line in &visible_lines {
                     renderer.draw_text(pixmap, line, ox + 18.0, ry, card_w - 28.0, 9.0, t.text_secondary);
                     ry += 15.0;
                 }
                 if more_count > 0 {
-                    renderer.draw_text(pixmap, &format!("  +{} more...", more_count), ox + 18.0, ry, card_w - 28.0, 9.0, t.text_muted);
+                    renderer.draw_text(pixmap, &format!("  ... {} more lines", more_count), ox + 18.0, ry, card_w - 28.0, 9.0, t.text_muted);
                 }
             }
 
@@ -435,11 +477,15 @@ fn message_height(msg: &ChatMessage) -> f32 {
         ChatMessage::PlanProposal { plan, .. } => {
             36.0 + (plan.steps.len() as f32 * 22.0).max(22.0) + 8.0
         }
-        ChatMessage::ExecutionDone { results, .. } => {
+        ChatMessage::ExecutionDone { results, preview, .. } => {
             let lines = format_all_results(results);
-            let visible = lines.len().min(12);
-            let more_h = if lines.len() > 12 { 15.0 } else { 0.0 };
-            28.0 + (visible as f32 * 15.0) + more_h + 16.0
+            let visible = lines.len().min(15);
+            let more_h = if lines.len() > 15 { 15.0 } else { 0.0 };
+            let thumb_h = match preview {
+                PreviewData::Image { height, .. } => *height as f32 + 10.0,
+                PreviewData::None => 0.0,
+            };
+            28.0 + thumb_h + (visible as f32 * 15.0) + more_h + 16.0
         }
         ChatMessage::AgentError { .. } => 46.0,
     }
@@ -469,17 +515,44 @@ fn format_all_results(results: &[CapabilityResult]) -> Vec<String> {
 }
 
 fn format_result_data(data: &serde_json::Value, lines: &mut Vec<String>) {
-    // File listings
+    // Image base64 — rendered as thumbnail, nothing to show as text
+    if data.get("type").and_then(|v| v.as_str()) == Some("image_base64") {
+        let path = data.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let bytes = data.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+        let filename = std::path::Path::new(path)
+            .file_name().and_then(|n| n.to_str()).unwrap_or(path);
+        lines.push(format!("  {} ({})", filename, format_size(bytes)));
+        return;
+    }
+
+    // File listings — tree-style with sizes
     if let Some(entries) = data.get("entries").and_then(|v| v.as_array()) {
         let count = data.get("count").and_then(|v| v.as_u64()).unwrap_or(entries.len() as u64);
-        for e in entries.iter().take(10) {
+        let path = data.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        lines.push(format!("  {} ({} items)", path, count));
+
+        // Sort: dirs first, then files alphabetically
+        let mut sorted: Vec<&serde_json::Value> = entries.iter().collect();
+        sorted.sort_by(|a, b| {
+            let a_dir = a.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
+            let b_dir = b.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
+            b_dir.cmp(&a_dir)
+        });
+
+        let show = sorted.len().min(15);
+        for (i, e) in sorted.iter().take(show).enumerate() {
             let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("?");
             let is_dir = e.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
-            let icon = if is_dir { ">" } else { "-" };
-            lines.push(format!("  {} {}", icon, name));
+            let size = e.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+            let connector = if i == show - 1 && count <= 15 { "\\--" } else { "|--" };
+            if is_dir {
+                lines.push(format!("  {} {}/", connector, name));
+            } else {
+                lines.push(format!("  {} {}    {}", connector, name, format_size(size)));
+            }
         }
-        if count > 10 {
-            lines.push(format!("  +{} more...", count - 10));
+        if count > 15 {
+            lines.push(format!("  \\-- +{} more...", count - 15));
         }
         return;
     }
@@ -562,10 +635,20 @@ fn format_result_data(data: &serde_json::Value, lines: &mut Vec<String>) {
         return;
     }
 
-    // File content
+    // File content — with line numbers and file stats
     if let Some(content) = data.get("content").and_then(|v| v.as_str()) {
-        for line in content.lines().take(8) {
-            lines.push(format!("  {}", truncate_str(line, 55)));
+        let path = data.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let filename = std::path::Path::new(path)
+            .file_name().and_then(|n| n.to_str()).unwrap_or(path);
+        let total_lines = data.get("lines").and_then(|v| v.as_u64()).unwrap_or(content.lines().count() as u64);
+        let byte_size = data.get("bytes").and_then(|v| v.as_u64()).unwrap_or(content.len() as u64);
+        lines.push(format!("  {} -- {} lines, {}", filename, total_lines, format_size(byte_size)));
+        lines.push(format!("  {}", "-".repeat(38)));
+        for (i, line) in content.lines().enumerate().take(15) {
+            lines.push(format!("  {:>3} | {}", i + 1, truncate_str(line, 46)));
+        }
+        if total_lines > 15 {
+            lines.push(format!("  ... {} more lines", total_lines - 15));
         }
         return;
     }
@@ -594,6 +677,55 @@ fn format_result_data(data: &serde_json::Value, lines: &mut Vec<String>) {
             lines.push(format!("  {}: {}", k, val));
         }
     }
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Decode the first image_base64 result into a premultiplied-RGBA thumbnail
+/// ready for tiny-skia rendering (max 220×150, aspect-preserved).
+fn decode_image_preview(results: &[CapabilityResult]) -> PreviewData {
+    for r in results {
+        if !r.success { continue; }
+        if r.data.get("type").and_then(|v| v.as_str()) != Some("image_base64") { continue; }
+        let encoded = match r.data.get("data").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        let bytes = match base64::engine::general_purpose::STANDARD.decode(encoded) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let img = match image::load_from_memory(&bytes) {
+            Ok(i) => i,
+            Err(_) => continue,
+        };
+        let orig_w = img.width();
+        let orig_h = img.height();
+        let scale = (220.0 / orig_w as f32).min(150.0 / orig_h as f32).min(1.0);
+        let new_w = ((orig_w as f32 * scale) as u32).max(1);
+        let new_h = ((orig_h as f32 * scale) as u32).max(1);
+        let resized = img.resize(new_w, new_h, image::imageops::FilterType::Triangle);
+        let rgba = resized.to_rgba8();
+        // Convert straight alpha → premultiplied alpha for tiny-skia
+        let mut premul: Vec<u8> = Vec::with_capacity((new_w * new_h * 4) as usize);
+        for px in rgba.pixels() {
+            let a = px[3] as f32 / 255.0;
+            premul.push((px[0] as f32 * a) as u8);
+            premul.push((px[1] as f32 * a) as u8);
+            premul.push((px[2] as f32 * a) as u8);
+            premul.push(px[3]);
+        }
+        return PreviewData::Image { pixels: premul, width: new_w, height: new_h };
+    }
+    PreviewData::None
 }
 
 fn format_params_inline(params: &serde_json::Value) -> String {

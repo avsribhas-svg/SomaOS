@@ -28,3 +28,7 @@ uuid = { version = "1", features = ["v4"] }
 # PTY support
 nix = { version = "0.29", features = ["term", "process", "poll", "fs", "signal"] }
 libc = "0.2"
+
+# Image previews
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+base64 = "0.22"
