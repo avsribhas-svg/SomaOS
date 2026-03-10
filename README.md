@@ -9,18 +9,34 @@
 </p>
 
 <p align="center">
+  <a href="#vision">Vision</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#capabilities">Capabilities</a> ·
   <a href="#getting-started">Getting Started</a> ·
-  <a href="#hardware-requirements">Hardware</a> ·
   <a href="#roadmap">Roadmap</a>
 </p>
 
 ---
 
+## Vision
+
+SomaOS is a purpose-built operating system that inverts the traditional computing paradigm: **the AI agent is the primary user of the system. Humans supervise through a structured approval interface.**
+
+Traditional operating systems were designed around how humans interact with machines — through file managers, menus, and graphical applications built for manual navigation. SomaOS is designed bottom-up for how AI agents create and execute tasks. Every workflow, every interface primitive, and every application is architected to be agent-inspectable and agent-drivable by default.
+
+This is a precedent system for future automation infrastructure. Instead of using programming as the medium to understand and control a machine, SomaOS uses AI agents as the native execution layer — with humans as supervisors, not operators.
+
+**The long-term stack:**
+- **Native Rust applications** (soma-sheets, soma-docs, soma-media, soma-canvas) where every piece of state is directly readable and writable by the agent via a shared `AgentAPI` trait
+- **Embedded browser** (WebKitGTK offscreen) for web-shaped apps and existing web tooling, driven by the agent via DOM/JS bridge
+- **Structured perception** — agents read app state directly; fall back to vision model (multimodal LLM) for unknown UIs
+- **Federation** — each SomaOS node is autonomous; nodes can delegate tasks to each other over network IPC
+
+---
+
 ## Abstract
 
-SomaOS is a purpose-built Linux distribution designed as the native execution environment for AI agents. Unlike conventional desktop operating systems retrofitted with AI assistants, SomaOS inverts the paradigm: **the agent is the primary user of the system, with humans serving as supervisors through a structured approval interface.**
+Current state (v0.8): SomaOS runs as a bootable Linux image with a custom bare-metal compositor.
 
 The system provides:
 - A **custom DRM/KMS compositor** that renders directly to GPU framebuffer — no X11 or Wayland server required
@@ -205,7 +221,7 @@ Layer 2 — Structured JSON planner
 
 ### IPC Protocol
 
-Communication uses **newline-delimited JSON** over a **Unix domain socket** (`/tmp/soma-agent.sock`).
+Communication uses **newline-delimited JSON** over a **Unix domain socket** (`/tmp/soma-agent.sock`). The protocol is transport-agnostic — designed to extend to TCP/TLS for federation in v1.2.
 
 #### Compositor → Agent Messages
 
@@ -236,7 +252,7 @@ DRM/KMS main loop (bare metal) OR winit event loop (dev)
     → Login screen (if not yet authenticated)
       OR
     → Terminal panel (left, variable width, PTY)
-    → Chat Sidebar panel (right, 380px)
+    → Chat Sidebar panel (right, 380px default, resizable)
       → Title bar + status pill
       → Scrollable message history
         → User bubbles
@@ -314,7 +330,7 @@ Run the winit backend for fast iteration. No VM needed.
 
 ```bash
 # 1. Clone
-git clone https://github.com/avsribhas-svg/SomaOS.git && cd SomaOS
+git clone git@github.com:avsribhas-svg/SomaOS.git && cd SomaOS
 
 # 2. Install and start Ollama
 ollama pull qwen2.5-coder:7b
@@ -331,25 +347,53 @@ cargo run -p soma-compositor
 cargo run -p soma-cli
 ```
 
-### VM Build (Full OS Image — DRM/KMS + login screen)
+### VM Build — Mac + VMware Fusion
 
 ```bash
-# Cross-compile Rust binaries + build full OS image
-cd buildroot
-./build.sh
+# Prerequisites: Docker Desktop running, VMware Fusion installed
+brew install qemu
 
-# Output: buildroot/output/soma-os.img
+# Build OS image (~40 min first time)
+git clone git@github.com:avsribhas-svg/SomaOS.git && cd SomaOS
+chmod +x buildroot/build.sh buildroot/post-build.sh
+cd buildroot && ./build.sh
 
-# Convert for VirtualBox (run in WSL2 or Ubuntu terminal)
-VBoxManage convertfromraw buildroot/output/soma-os.img soma-os.vdi --format VDI
-
-# Or boot directly in QEMU
-qemu-system-x86_64 -m 4G -smp 2 \
-  -drive file=buildroot/output/soma-os.img,if=virtio,format=raw \
-  -device virtio-vga -display sdl
+# Convert to VMDK
+qemu-img convert -f raw -O vmdk buildroot/output/soma-os.img ~/Desktop/soma-os.vmdk
 ```
 
-See [docs/WINDOWS_BUILD.md](docs/WINDOWS_BUILD.md) for the full VirtualBox setup guide.
+VMware Fusion → New → Custom VM → Linux (Other 64-bit) → Use existing disk → select `soma-os.vmdk`
+Settings: 4096 MB RAM, 2 CPUs, NAT network, 3D acceleration on.
+
+### VM Build — Windows (WSL2) + VirtualBox
+
+```bash
+# In WSL2 terminal
+sudo apt install -y git qemu-utils
+git clone git@github.com:avsribhas-svg/SomaOS.git && cd SomaOS
+chmod +x buildroot/build.sh buildroot/post-build.sh
+cd buildroot && ./build.sh
+
+# Convert and copy to Windows Desktop
+qemu-img convert -f raw -O vmdk \
+  buildroot/output/soma-os.img \
+  /mnt/c/Users/$USER/Desktop/soma-os.vmdk
+```
+
+VirtualBox → New → Linux (Other 64-bit, 64-bit) → 4096 MB → Use existing disk → `soma-os.vmdk`
+Settings → Display: **VMSVGA**, 128 MB VRAM, 3D acceleration on.
+
+See [docs/WINDOWS_BUILD.md](docs/WINDOWS_BUILD.md) for the full setup guide.
+
+### Iterative Dev (after first build)
+
+```bash
+# Recompile Rust only (~2 min)
+./build.sh --rust-only
+
+# Rebuild image (~5 min, uses cached Buildroot)
+./build.sh --image-only
+```
 
 ---
 
@@ -388,14 +432,14 @@ Native OS Project/
 │       │   ├── mod.rs                  # InputEvent types (KeyCode, MouseBtn)
 │       │   └── drm.rs                  # DRM/KMS: open card, dumb buffer, page flip
 │       └── input/
-│           ├── mod.rs                  # Input module
+│           ├── mod.rs                  # Input abstraction layer
 │           └── evdev_input.rs          # evdev keyboard + mouse (/dev/input/event*)
 │
 ├── soma-cli/                           # CLI test client
 │   └── src/main.rs
 │
 ├── docs/
-│   └── WINDOWS_BUILD.md               # Full VirtualBox setup guide for Windows
+│   └── WINDOWS_BUILD.md               # Full VirtualBox/VMware setup guide for Windows
 │
 └── buildroot/                          # OS image build system
     ├── Dockerfile                      # Build environment (Ubuntu 22.04 + musl + Buildroot)
@@ -467,14 +511,37 @@ Native OS Project/
 - [x] soma-ollama.service auto-start
 - [x] soma-first-boot.service (one-shot model pull on first boot)
 - [x] 4 GB rootfs, ALSA + espeak-ng in Buildroot image
-- [x] build.sh updated for DRM feature flag + VDI output instructions
 
-### v1.0 — Ship It
-- [ ] USB bootable installer image
-- [ ] GPU passthrough for QEMU (faster LLM inference)
-- [ ] Plugin API for third-party capabilities
-- [ ] Security hardening (seccomp, AppArmor, audit log)
-- [ ] OTA updates
+### v0.9 — Browser Panel + Vision
+- [ ] Embed WebKitGTK offscreen into compositor framebuffer (no Wayland/X11 needed)
+- [ ] `browser` agent capability: navigate, query_selector, eval, screenshot_region
+- [ ] Vision fallback: multimodal LLM (qwen2.5-vl or llava) for unknown UIs
+- [ ] Basic tab management in compositor browser panel
+
+### v1.0 — Native App Framework
+- [ ] `AgentAPI` trait in soma-common: `describe_state`, `execute_action`, `subscribe_changes`
+- [ ] `soma-sheets`: spreadsheet with full agent read/write API (cells, formulas, ranges)
+- [ ] `soma-docs`: document editor with structured agent API (paragraphs, headings, tables)
+- [ ] Compositor multi-panel layout (terminal | browser | native app | sidebar)
+- [ ] App launcher driven by agent intent ("open a spreadsheet for this data")
+
+### v1.1 — Media + Generation
+- [ ] `soma-media`: image/video generation pipeline (local diffusion via Ollama or separate runtime)
+- [ ] Media result cards in sidebar (video playback, image gallery)
+- [ ] Agent capabilities: generate_image, generate_video, generate_audio
+
+### v1.2 — Federation
+- [ ] Network IPC: TCP/TLS transport wrapper over existing JSON socket protocol
+- [ ] Node registry: agents discover peers via config or DNS-SD
+- [ ] `delegate` capability: orchestrator sends task to remote node, streams results back
+- [ ] Unified HITL queue: all node approvals aggregated on orchestrator node
+- [ ] Node auth: token-based, scoped permissions per node
+
+### v2.0 — USB Bootable + Plugin API
+- [ ] USB installer (GRUB + EFI, fits on 8 GB USB)
+- [ ] Plugin API: third-party capabilities as shared Rust dylibs or WASM modules
+- [ ] Seccomp + AppArmor sandboxing per agent capability
+- [ ] OTA update system (delta images, signed, agent-driven)
 
 ---
 
@@ -487,6 +554,14 @@ Traditional desktops are designed for mouse-and-keyboard humans. For an AI agent
 - **Minimal footprint** — SomaOS boots in seconds with ~100 MB RAM baseline
 - **The chat sidebar is the primary interface**, not an afterthought
 - **DRM/KMS direct rendering** — no Wayland/X11 server needed, nothing between the agent and the display
+- **Future browser embedding** — WebKitGTK offscreen renders to an RGBA pixmap that composites into the existing DRM framebuffer; no architectural change needed
+
+### Why Native Rust apps + embedded browser (not just a browser shell)?
+
+Two categories of applications need two different models:
+- **Native Rust apps** (soma-sheets, soma-docs, soma-canvas) expose a typed `AgentAPI` where the agent reads and writes state directly — no screen-scraping, no DOM parsing, zero ambiguity
+- **Embedded browser** (WebKitGTK offscreen) handles web-shaped apps and existing web tooling via a DOM/JS bridge — the agent queries CSS selectors and evaluates JS
+- Both produce RGBA pixmaps that the compositor composites identically — the boundary is only in how the agent *talks* to them
 
 ### Why a capability system instead of raw shell commands?
 
@@ -494,6 +569,7 @@ Traditional desktops are designed for mouse-and-keyboard humans. For an AI agent
 - **Structured output** — Results are JSON, enabling rich UI (thumbnails, trees, line numbers)
 - **Extensibility** — New capabilities are just Rust structs implementing a trait
 - **Auditability** — Every action logged with capability, action, and parameters
+- **Future AgentAPI parity** — The same structured-data philosophy will extend to application-level APIs
 
 ### Why a three-layer intent pipeline?
 
@@ -508,6 +584,11 @@ A single LLM call for every command is slow and unreliable for common patterns:
 - **Privacy** — Commands and file contents never leave the machine
 - **Reliability** — No internet dependency during operation
 - **Cost** — No per-token billing
+- **Model-agnostic** — Any Ollama-compatible model can be swapped in; vision models (qwen2.5-vl) will be added alongside the task model in v0.9
+
+### Why federation by design?
+
+Each SomaOS node is autonomous — it runs its own agent, its own LLM, its own HITL queue. Federation is an additive transport layer: the existing Unix socket protocol (newline-delimited JSON) wraps in TCP/TLS and gains a node routing header. No protocol redesign, no breaking changes. This means a single-user workstation today can become an orchestrator node tomorrow without architectural rework.
 
 ### Why Rust?
 
@@ -515,6 +596,7 @@ A single LLM call for every command is slow and unreliable for common patterns:
 - **Single static binary** — musl target, no runtime dependencies in the OS image
 - **Direct DRM/evdev access** — Rust crates wrap kernel ioctls cleanly
 - **Cross-compilation** — `cargo build --target x86_64-unknown-linux-musl`
+- **`AgentAPI` as a Rust trait** — Applications that implement the trait get agent integration for free, with compiler-enforced interface contracts
 
 ---
 
@@ -566,5 +648,5 @@ MIT
 ---
 
 <p align="center">
-  <sub>SomaOS — Where the agent is the interface.</sub>
+  <sub>SomaOS — The machine, built for the agent.</sub>
 </p>
