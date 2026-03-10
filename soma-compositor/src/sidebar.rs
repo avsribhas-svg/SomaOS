@@ -53,6 +53,8 @@ pub struct Sidebar {
     pub scroll_offset: f32,
     pub cursor_visible: bool,
     cursor_timer: f32,
+    /// Index of the message whose detail modal is open (None = closed)
+    pub expanded_msg_idx: Option<usize>,
 }
 
 impl Sidebar {
@@ -67,6 +69,7 @@ impl Sidebar {
             scroll_offset: 0.0,
             cursor_visible: true,
             cursor_timer: 0.0,
+            expanded_msg_idx: None,
         }
     }
 
@@ -175,6 +178,118 @@ impl Sidebar {
             self.cursor_timer = 0.0;
             self.cursor_visible = !self.cursor_visible;
         }
+    }
+
+    /// Handle a click inside the sidebar panel.
+    /// `rel_x/rel_y` are relative to the sidebar's left edge.
+    /// Returns true if a message card was toggled (needs redraw).
+    pub fn on_sidebar_click(&mut self, rel_x: f32, rel_y: f32, height: f32) -> bool {
+        // If detail modal is open, any click dismisses it
+        if self.expanded_msg_idx.is_some() {
+            self.expanded_msg_idx = None;
+            return true;
+        }
+
+        let content_y = 48.0;
+        let content_h = height - 48.0 - 68.0;
+        if rel_y < content_y || rel_y > content_y + content_h { return false; }
+
+        let scroll = self.scroll_offset;
+        let mut accumulated = 0.0_f32;
+
+        for (i, msg) in self.messages.iter().enumerate() {
+            let h = message_height(msg);
+            let msg_y = content_y + 4.0 + accumulated - scroll;
+            accumulated += h + MSG_PAD;
+
+            if msg_y + h < content_y { continue; }
+            if msg_y > content_y + content_h { break; }
+
+            if rel_y >= msg_y && rel_y <= msg_y + h {
+                // Only error cards and execution done cards are expandable
+                match msg {
+                    ChatMessage::AgentError { .. } | ChatMessage::ExecutionDone { .. } => {
+                        self.expanded_msg_idx = Some(i);
+                        return true;
+                    }
+                    _ => {}
+                }
+                break;
+            }
+        }
+        false
+    }
+
+    /// Render the full-detail modal for the expanded message.
+    pub fn render_expanded_msg(&self, renderer: &mut Renderer, pixmap: &mut Pixmap, width: f32, height: f32) {
+        let idx = match self.expanded_msg_idx {
+            Some(i) => i,
+            None => return,
+        };
+        let msg = match self.messages.get(idx) {
+            Some(m) => m,
+            None => return,
+        };
+        let t = renderer.theme.clone();
+
+        // Backdrop
+        renderer.fill_rect(pixmap, 0.0, 0.0, width, height, [0, 0, 0, 160]);
+
+        let mw = (width * 0.65).min(540.0);
+        let mh = (height * 0.72).min(480.0);
+        let mx = (width - mw) / 2.0;
+        let my = (height - mh) / 2.0;
+
+        renderer.fill_rounded_rect(pixmap, mx, my, mw, mh, 14.0, [18, 18, 36, 252]);
+        renderer.stroke_rect(pixmap, mx, my, mw, mh, t.border);
+
+        match msg {
+            ChatMessage::AgentError { message } => {
+                renderer.draw_text(pixmap, "Error Details", mx + 18.0, my + 14.0, mw - 36.0, 12.0, t.error);
+                renderer.fill_rect(pixmap, mx + 18.0, my + 36.0, mw - 36.0, 1.0, t.border);
+                let mut ty = my + 50.0;
+                for line in wrap_text(message, ((mw - 40.0) / 7.5) as usize) {
+                    if ty > my + mh - 36.0 { break; }
+                    renderer.draw_text(pixmap, &line, mx + 18.0, ty, mw - 36.0, 10.0, t.text_secondary);
+                    ty += 17.0;
+                }
+            }
+            ChatMessage::ExecutionDone { intent, results, success_count, total, .. } => {
+                let header_color = if success_count == total { t.success } else { t.warning };
+                renderer.draw_text(pixmap, &format!("Result: {}", intent), mx + 18.0, my + 14.0, mw - 36.0, 12.0, header_color);
+                renderer.fill_rect(pixmap, mx + 18.0, my + 36.0, mw - 36.0, 1.0, t.border);
+                let mut ty = my + 50.0;
+                for r in results {
+                    if !r.success {
+                        if let Some(err) = &r.error {
+                            renderer.draw_text(pixmap, "! Error:", mx + 18.0, ty, mw - 36.0, 9.0, t.error);
+                            ty += 15.0;
+                            for line in wrap_text(err, ((mw - 56.0) / 7.5) as usize) {
+                                if ty > my + mh - 36.0 { break; }
+                                renderer.draw_text(pixmap, &format!("  {}", line), mx + 18.0, ty, mw - 36.0, 9.5, t.text_secondary);
+                                ty += 15.0;
+                            }
+                            ty += 4.0;
+                        }
+                    } else if let Some(obj) = r.data.as_object() {
+                        for (k, v) in obj.iter().take(12) {
+                            if ty > my + mh - 36.0 { break; }
+                            let val = match v {
+                                serde_json::Value::String(s) => truncate_str(s, 60),
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::Bool(b) => b.to_string(),
+                                _ => continue,
+                            };
+                            renderer.draw_text(pixmap, &format!("  {}: {}", k, val), mx + 18.0, ty, mw - 36.0, 9.5, t.text_secondary);
+                            ty += 15.0;
+                        }
+                    }
+                }
+            }
+            _ => return,
+        }
+
+        renderer.draw_text(pixmap, "Click anywhere to dismiss", mx + 18.0, my + mh - 22.0, mw - 36.0, 9.0, t.text_muted);
     }
 
     // ──────────────────────────────────────────────
@@ -726,6 +841,30 @@ fn decode_image_preview(results: &[CapabilityResult]) -> PreviewData {
         return PreviewData::Image { pixels: premul, width: new_w, height: new_h };
     }
     PreviewData::None
+}
+
+/// Wrap text into lines of at most `max_chars` characters, breaking on whitespace.
+fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
+    let max_chars = max_chars.max(10);
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut current = String::new();
+        for word in paragraph.split_whitespace() {
+            if current.is_empty() {
+                current = word.to_string();
+            } else if current.len() + 1 + word.len() <= max_chars {
+                current.push(' ');
+                current.push_str(word);
+            } else {
+                lines.push(std::mem::take(&mut current));
+                current = word.to_string();
+            }
+        }
+        if !current.is_empty() || paragraph.is_empty() {
+            lines.push(current);
+        }
+    }
+    lines
 }
 
 fn format_params_inline(params: &serde_json::Value) -> String {

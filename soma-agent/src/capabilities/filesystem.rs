@@ -108,7 +108,7 @@ impl Capability for FileSystemCapability {
 
 impl FileSystemCapability {
     fn list_dir(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()) {
+        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
@@ -117,7 +117,7 @@ impl FileSystemCapability {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        match fs::read_dir(path) {
+        match fs::read_dir(&path) {
             Ok(entries) => {
                 let mut items: Vec<Value> = Vec::new();
                 for entry in entries.flatten() {
@@ -142,19 +142,19 @@ impl FileSystemCapability {
     }
 
     fn read_file(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()) {
+        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
 
         // Detect image extensions — return base64-encoded bytes instead of text
-        let ext = Path::new(path)
+        let ext = Path::new(&path)
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
         if ["png", "jpg", "jpeg", "gif", "bmp", "webp"].contains(&ext.as_str()) {
-            return match fs::read(path) {
+            return match fs::read(&path) {
                 Ok(bytes) => {
                     use base64::Engine;
                     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -172,7 +172,7 @@ impl FileSystemCapability {
 
         let max_lines = params.get("lines").and_then(|v| v.as_u64());
 
-        match fs::read_to_string(path) {
+        match fs::read_to_string(&path) {
             Ok(content) => {
                 let output = match max_lines {
                     Some(n) => content
@@ -191,7 +191,7 @@ impl FileSystemCapability {
     }
 
     fn write_file(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()) {
+        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
@@ -200,35 +200,35 @@ impl FileSystemCapability {
             None => return err("Missing required param: content"),
         };
 
-        match fs::write(path, content) {
+        match fs::write(&path, content) {
             Ok(_) => ok(json!({ "path": path, "bytes_written": content.len() })),
             Err(e) => err(&format!("Cannot write file '{}': {}", path, e)),
         }
     }
 
     fn create_dir(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()) {
+        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
 
-        match fs::create_dir_all(path) {
+        match fs::create_dir_all(&path) {
             Ok(_) => ok(json!({ "path": path, "created": true })),
             Err(e) => err(&format!("Cannot create directory '{}': {}", path, e)),
         }
     }
 
     fn delete(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()) {
+        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
 
-        let p = Path::new(path);
+        let p = Path::new(&path);
         let result = if p.is_dir() {
-            fs::remove_dir(path)
+            fs::remove_dir(&path)
         } else {
-            fs::remove_file(path)
+            fs::remove_file(&path)
         };
 
         match result {
@@ -238,39 +238,39 @@ impl FileSystemCapability {
     }
 
     fn copy(&self, params: &Value) -> CapabilityResult {
-        let from = match params.get("from").and_then(|v| v.as_str()) {
+        let from = match params.get("from").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: from"),
         };
-        let to = match params.get("to").and_then(|v| v.as_str()) {
+        let to = match params.get("to").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: to"),
         };
 
-        match fs::copy(from, to) {
+        match fs::copy(&from, &to) {
             Ok(bytes) => ok(json!({ "from": from, "to": to, "bytes_copied": bytes })),
             Err(e) => err(&format!("Cannot copy '{}' to '{}': {}", from, to, e)),
         }
     }
 
     fn move_item(&self, params: &Value) -> CapabilityResult {
-        let from = match params.get("from").and_then(|v| v.as_str()) {
+        let from = match params.get("from").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: from"),
         };
-        let to = match params.get("to").and_then(|v| v.as_str()) {
+        let to = match params.get("to").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: to"),
         };
 
-        match fs::rename(from, to) {
+        match fs::rename(&from, &to) {
             Ok(_) => ok(json!({ "from": from, "to": to, "moved": true })),
             Err(e) => err(&format!("Cannot move '{}' to '{}': {}", from, to, e)),
         }
     }
 
     fn find(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()) {
+        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
@@ -281,7 +281,7 @@ impl FileSystemCapability {
 
         let mut matches = Vec::new();
         if let Ok(output) = std::process::Command::new("find")
-            .args([path, "-name", pattern, "-maxdepth", "3"])
+            .arg(&path).arg("-name").arg(pattern).arg("-maxdepth").arg("3")
             .output()
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -296,12 +296,12 @@ impl FileSystemCapability {
     }
 
     fn file_info(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()) {
+        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
 
-        match fs::metadata(path) {
+        match fs::metadata(&path) {
             Ok(meta) => {
                 let modified = meta
                     .modified()
@@ -321,6 +321,16 @@ impl FileSystemCapability {
             Err(e) => err(&format!("Cannot stat '{}': {}", path, e)),
         }
     }
+}
+
+/// Expand a leading `~` to the HOME directory.
+fn expand_tilde(path: &str) -> String {
+    if path == "~" || path.starts_with("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{}{}", home, &path[1..]);
+        }
+    }
+    path.to_string()
 }
 
 fn ok(data: Value) -> CapabilityResult {

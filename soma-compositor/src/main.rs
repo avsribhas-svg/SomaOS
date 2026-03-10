@@ -258,6 +258,12 @@ impl SomaApp {
                 .render_approval_overlay(&mut self.renderer, &mut pixmap, w, h);
         }
 
+        // Detail modal for clicked error/result cards
+        if self.sidebar.expanded_msg_idx.is_some() {
+            self.sidebar
+                .render_expanded_msg(&mut self.renderer, &mut pixmap, w, h);
+        }
+
         // Render toasts (top-right, above sidebar)
         let mut toast_y = 8.0;
         for toast in &self.toasts {
@@ -513,13 +519,13 @@ impl ApplicationHandler for SomaApp {
                             if (self.mouse_x - div).abs() < DIVIDER_HIT {
                                 // Start divider drag
                                 self.dragging_divider = true;
+                            } else if self.mouse_x < div {
+                                self.focus = FocusPanel::Terminal;
                             } else {
-                                // Click-to-focus
-                                if self.mouse_x < div {
-                                    self.focus = FocusPanel::Terminal;
-                                } else {
-                                    self.focus = FocusPanel::Sidebar;
-                                }
+                                self.focus = FocusPanel::Sidebar;
+                                // Route click into sidebar (card expand / modal dismiss)
+                                let h = win.inner_size().height as f32;
+                                self.sidebar.on_sidebar_click(self.mouse_x - div, self.mouse_y, h);
                             }
                         }
                         ElementState::Released => {
