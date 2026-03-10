@@ -5,7 +5,7 @@ FROM --platform=linux/amd64 ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Buildroot dependencies
+# Install Buildroot dependencies + Rust cross-compile deps
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc g++ \
@@ -29,12 +29,15 @@ RUN apt-get update && apt-get install -y \
     dosfstools mtools \
     genext2fs \
     xorriso \
+    musl-tools \
+    libdrm-dev \
+    libevdev-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust (for cross-compiling soma binaries)
+# Install Rust with musl target for fully static binaries
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && . "$HOME/.cargo/env" \
-    && rustup target add x86_64-unknown-linux-gnu
+    && rustup target add x86_64-unknown-linux-musl
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
@@ -57,4 +60,6 @@ COPY overlay/ /opt/overlay/
 WORKDIR /opt/buildroot
 
 # Default: build the full image
+# Note: Rust binaries are cross-compiled by build.sh before this container runs.
+# The overlay/usr/bin/ directory will contain the pre-built binaries.
 CMD ["bash", "-c", "make soma_defconfig && make -j$(nproc)"]

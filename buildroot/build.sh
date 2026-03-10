@@ -33,9 +33,16 @@ if [ "$1" != "--image-only" ]; then
         -w /project \
         rust:latest \
         bash -c "
-            apt-get update -qq && apt-get install -y -qq musl-tools > /dev/null 2>&1
+            apt-get update -qq && apt-get install -y -qq \
+                musl-tools libdrm-dev libevdev-dev > /dev/null 2>&1
             rustup target add x86_64-unknown-linux-musl
-            cargo build --release --target x86_64-unknown-linux-musl -p soma-agent -p soma-compositor -p soma-cli 2>&1
+            # Agent: default features
+            cargo build --release --target x86_64-unknown-linux-musl \
+                -p soma-agent -p soma-cli 2>&1
+            # Compositor: DRM/KMS backend (no winit)
+            cargo build --release --target x86_64-unknown-linux-musl \
+                -p soma-compositor \
+                --no-default-features --features drm-backend 2>&1
         "
 
     # Copy binaries to the overlay
@@ -82,11 +89,14 @@ echo ""
 echo "Output files:"
 ls -lh "$OUTPUT_DIR/"
 echo ""
-echo "Next steps:"
-echo "  1. Copy soma-os.iso to your Windows laptop"
-echo "  2. Open VirtualBox → New → Linux (Other 64-bit)"
-echo "  3. Attach soma-os.iso as optical drive"
-echo "  4. Boot → SomaOS will auto-login as root"
+echo "Next steps (VirtualBox on Windows):"
+echo "  1. Copy $OUTPUT_DIR/soma-os.img to Windows"
+echo "  2. In Windows PowerShell (as admin):"
+echo "       VBoxManage convertfromraw soma-os.img soma-os.vdi --format VDI"
+echo "  3. VirtualBox → New → Linux / Other 64-bit → 4 GB RAM"
+echo "     → Use existing VHD → select soma-os.vdi"
+echo "  4. VM Settings → Display → VMSVGA, 128 MB VRAM, 3D on"
+echo "  5. Boot → login: soma"
 echo ""
 echo "Or test locally with QEMU:"
-echo "  qemu-system-x86_64 -m 2G -cdrom $OUTPUT_DIR/soma-os.iso -display sdl"
+echo "  qemu-system-x86_64 -m 4G -drive file=$OUTPUT_DIR/soma-os.img,if=virtio,format=raw -device virtio-vga -display sdl"
