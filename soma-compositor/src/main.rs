@@ -48,6 +48,7 @@ const MAX_SIDEBAR_W: f32 = 600.0;
 const DEFAULT_SIDEBAR_W: f32 = 380.0;
 const DIVIDER_HIT: f32 = 6.0; // hit target width for divider drag
 
+#[cfg(feature = "winit-backend")]
 struct SomaApp {
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
@@ -71,6 +72,7 @@ struct SomaApp {
     modifiers: ModifiersState,
 }
 
+#[cfg(feature = "winit-backend")]
 impl SomaApp {
     fn new(runtime: tokio::runtime::Handle) -> Self {
         Self {
@@ -335,6 +337,7 @@ impl SomaApp {
     }
 }
 
+#[cfg(feature = "winit-backend")]
 impl ApplicationHandler for SomaApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {

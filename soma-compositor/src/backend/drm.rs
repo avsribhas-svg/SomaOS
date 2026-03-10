@@ -10,7 +10,7 @@ use drm::control::{connector, crtc, dumbbuffer::DumbBuffer, Device as CtrlDevice
 use drm::Device;
 use memmap2::MmapMut;
 use std::fs::{File, OpenOptions};
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 // ── DRM card wrapper ────────────────────────────────────────────────────────
 
@@ -19,6 +19,12 @@ struct Card(File);
 impl AsRawFd for Card {
     fn as_raw_fd(&self) -> RawFd {
         self.0.as_raw_fd()
+    }
+}
+
+impl AsFd for Card {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
     }
 }
 
