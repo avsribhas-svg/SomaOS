@@ -59,7 +59,8 @@ COPY overlay/ /opt/overlay/
 # Working directory for the build
 WORKDIR /opt/buildroot
 
-# Default: build the full image
-# Note: Rust binaries are cross-compiled by build.sh before this container runs.
-# The overlay/usr/bin/ directory will contain the pre-built binaries.
-CMD ["bash", "-c", "make soma_defconfig && make -j$(nproc)"]
+# Default: build the full image.
+# Use Buildroot's own BR2_JLEVEL knob instead of top-level make jobserver flags.
+# This avoids nested kernel/header builds inheriting broken jobserver FDs under Docker.
+ENV SOMA_BUILD_JOBS=1
+CMD ["bash", "-lc", "make soma_defconfig && make BR2_JLEVEL=${SOMA_BUILD_JOBS}"]

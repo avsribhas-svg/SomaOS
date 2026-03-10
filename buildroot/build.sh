@@ -11,6 +11,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="$SCRIPT_DIR/output"
+BUILD_JOBS="${SOMA_BUILD_JOBS:-1}"
 
 echo "╔══════════════════════════════════════════╗"
 echo "║    SomaOS Build Pipeline                  ║"
@@ -64,13 +65,16 @@ fi
 # Step 2: Build the Buildroot image
 # ──────────────────────────────────────────────
 echo "▸ Step 2: Building SomaOS image via Buildroot (this takes 20-40 min first time)..."
+echo "  Buildroot package parallelism: $BUILD_JOBS"
 echo ""
 
 # Build the Docker builder image
 docker build --platform linux/amd64 -t soma-builder "$SCRIPT_DIR"
 
 # Run the build and extract the output images
-CONTAINER_ID=$(docker create --platform linux/amd64 soma-builder)
+CONTAINER_ID=$(docker create --platform linux/amd64 \
+    -e SOMA_BUILD_JOBS="$BUILD_JOBS" \
+    soma-builder)
 docker start -a "$CONTAINER_ID"
 
 # Extract built images
