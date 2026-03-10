@@ -16,6 +16,12 @@
   <a href="#roadmap">Roadmap</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/avsribhas-svg/SomaOS/actions/workflows/build.yml">
+    <img src="https://github.com/avsribhas-svg/SomaOS/actions/workflows/build.yml/badge.svg" alt="Build SomaOS Image" />
+  </a>
+</p>
+
 ---
 
 ## Vision
@@ -324,6 +330,19 @@ User: "delete the boot folder there" → filesystem.delete {path: "/var/boot"}
 | **Ollama** | Latest | Local LLM inference |
 | **Docker** | 20+ | Build the Buildroot image |
 
+### Download a Pre-Built Image (Fastest)
+
+Every push to `main` automatically builds a bootable image via GitHub Actions (native x86_64 Linux, no Rosetta). No local build required.
+
+1. Go to [Actions](https://github.com/avsribhas-svg/SomaOS/actions/workflows/build.yml) → click the latest passing run
+2. Download `soma-os-x86_64-<sha>.zip` from **Artifacts**
+3. Extract → `gunzip soma-os.img.gz`
+4. Follow the VirtualBox setup in [docs/WINDOWS_BUILD.md](docs/WINDOWS_BUILD.md) (skip the build steps)
+
+For tagged releases, images are also attached directly to the [GitHub Release](https://github.com/avsribhas-svg/SomaOS/releases).
+
+---
+
 ### Dev Mode (macOS/Linux — winit window)
 
 Run the winit backend for fast iteration. No VM needed.
@@ -385,15 +404,23 @@ Settings → Display: **VMSVGA**, 128 MB VRAM, 3D acceleration on.
 
 See [docs/WINDOWS_BUILD.md](docs/WINDOWS_BUILD.md) for the full setup guide.
 
-### Iterative Dev (after first build)
+### Iterative Dev (fastest loop — no image rebuild)
+
+After any Rust code change, skip the full image rebuild entirely. Recompile and deploy directly to a running VM:
 
 ```bash
-# Recompile Rust only (~2 min)
+# 1. Recompile Rust binaries only (~5-15 min)
 ./build.sh --rust-only
 
-# Rebuild image (~5 min, uses cached Buildroot)
-./build.sh --image-only
+# 2. Copy new binaries into the running VM
+scp overlay/usr/bin/soma-compositor root@<VM-IP>:/usr/bin/
+scp overlay/usr/bin/soma-agent root@<VM-IP>:/usr/bin/
+
+# 3. Restart services
+ssh root@<VM-IP> "systemctl restart soma-agent soma-compositor"
 ```
+
+Full image rebuilds (`--image-only`) are only needed when changing `soma_defconfig`, `post-build.sh`, or systemd units — roughly once per major version. Those builds run automatically on CI.
 
 ---
 
@@ -440,6 +467,10 @@ Native OS Project/
 │
 ├── docs/
 │   └── WINDOWS_BUILD.md               # Full VirtualBox/VMware setup guide for Windows
+│
+├── .github/
+│   └── workflows/
+│       └── build.yml                  # CI: builds x86_64 image on every push to main
 │
 └── buildroot/                          # OS image build system
     ├── Dockerfile                      # Build environment (Ubuntu 22.04 + musl + Buildroot)

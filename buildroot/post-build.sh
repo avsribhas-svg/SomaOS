@@ -34,6 +34,7 @@ chmod 600 "${TARGET_DIR}/etc/soma/passwd"
 mkdir -p "${TARGET_DIR}/var/lib/soma/ollama-models"
 
 # ── First-boot model download script ─────────────────────────────────────────
+mkdir -p "${TARGET_DIR}/usr/local/bin"
 cat > "${TARGET_DIR}/usr/local/bin/soma-first-boot.sh" << 'SCRIPT'
 #!/bin/bash
 # Downloads qwen2.5-coder:7b on first boot. Skips on subsequent boots.
