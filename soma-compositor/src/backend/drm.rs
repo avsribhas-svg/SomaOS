@@ -6,9 +6,13 @@
 /// the dumb buffer, then call drmModeSetCrtc to flip the frame.
 ///
 /// Input is handled separately via evdev (see ../input/evdev.rs).
-use drm::control::{connector, crtc, dumbbuffer::DumbBuffer, Device as CtrlDevice};
+use drm::control::{
+    connector,
+    crtc,
+    dumbbuffer::{DumbBuffer, DumbMapping},
+    Device as CtrlDevice,
+};
 use drm::Device;
-use memmap2::MmapMut;
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
@@ -42,10 +46,10 @@ pub struct DrmDisplay {
     pub height: u32,
     /// Front buffer (currently displayed)
     front: DumbBuffer,
-    front_map: MmapMut,
+    front_map: DumbMapping<'static>,
     /// Back buffer (we render into this)
     back: DumbBuffer,
-    back_map: MmapMut,
+    back_map: DumbMapping<'static>,
     /// Framebuffer handles for each dumb buffer
     front_fb: drm::control::framebuffer::Handle,
     back_fb: drm::control::framebuffer::Handle,
@@ -117,19 +121,19 @@ impl DrmDisplay {
         let saved_crtc = card.get_crtc(crtc_handle).ok();
 
         // Create two dumb buffers (double buffering)
-        let front = card
+        let mut front = card
             .create_dumb_buffer((width, height), drm::buffer::DrmFourcc::Xrgb8888, 32)
             .map_err(|e| format!("Cannot create front dumb buffer: {}", e))?;
-        let back = card
+        let mut back = card
             .create_dumb_buffer((width, height), drm::buffer::DrmFourcc::Xrgb8888, 32)
             .map_err(|e| format!("Cannot create back dumb buffer: {}", e))?;
 
         // Map both into process memory
         let front_map = card
-            .map_dumb_buffer(&front)
+            .map_dumb_buffer(&mut front)
             .map_err(|e| format!("Cannot map front buffer: {}", e))?;
         let back_map = card
-            .map_dumb_buffer(&back)
+            .map_dumb_buffer(&mut back)
             .map_err(|e| format!("Cannot map back buffer: {}", e))?;
 
         // Create framebuffer objects

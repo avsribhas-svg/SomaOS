@@ -93,7 +93,7 @@ impl LoginScreen {
         let box_w = 320.0_f32.min(w - 80.0);
         let box_x = (w - box_w) / 2.0;
         let shake_off = if self.shake_timer > 0.0 {
-            ((self.shake_timer * 40.0).sin() * 8.0)
+            (self.shake_timer * 40.0).sin() * 8.0
         } else {
             0.0
         };

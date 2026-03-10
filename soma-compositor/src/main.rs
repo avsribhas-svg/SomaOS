@@ -7,13 +7,15 @@ mod sidebar;
 mod terminal;
 
 use log::info;
-use login::{LoginResult, LoginScreen};
 use renderer::Renderer;
 use sidebar::Sidebar;
-use soma_common::CompositorMessage;
 use std::sync::{Arc, Mutex};
 use terminal::Terminal;
 
+#[cfg(feature = "drm-backend")]
+use login::{LoginResult, LoginScreen};
+#[cfg(feature = "winit-backend")]
+use soma_common::CompositorMessage;
 #[cfg(feature = "winit-backend")]
 use std::num::NonZeroU32;
 #[cfg(feature = "winit-backend")]
@@ -642,7 +644,7 @@ fn drm_main(runtime: tokio::runtime::Handle) {
     let target_frame = Duration::from_millis(16); // ~60 fps
     let mut last = Instant::now();
 
-    'main: loop {
+    loop {
         let now = Instant::now();
         let dt = now.duration_since(last).as_secs_f32().min(0.1);
         last = now;
@@ -692,7 +694,9 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                                     if let Some(tx) = &agent_tx { let _ = tx.send(msg); }
                                 }
                             }
-                            FocusPanel::Terminal => terminal.on_submit(),
+                            FocusPanel::Terminal => {
+                                terminal.on_submit();
+                            }
                         },
                         KeyCode::Backspace => match focus {
                             FocusPanel::Sidebar => sidebar.on_backspace(),
@@ -834,21 +838,12 @@ fn drm_main(runtime: tokio::runtime::Handle) {
         }
 
         // Present to DRM
-        display.present(bytemuck_rgba(pixmap.data()));
+        display.present(pixmap.data());
 
         // Frame pacing
         let elapsed = Instant::now().duration_since(last);
         if elapsed < target_frame {
             std::thread::sleep(target_frame - elapsed);
         }
-    }
-}
-
-/// Reinterpret tiny-skia's PremultipliedColorU8 slice as raw bytes.
-#[cfg(feature = "drm-backend")]
-fn bytemuck_rgba(pixels: &[tiny_skia::PremultipliedColorU8]) -> &[u8] {
-    // SAFETY: PremultipliedColorU8 is [u8;4], same layout as &[u8] with 4× len
-    unsafe {
-        std::slice::from_raw_parts(pixels.as_ptr() as *const u8, pixels.len() * 4)
     }
 }

@@ -183,7 +183,7 @@ impl Sidebar {
     /// Handle a click inside the sidebar panel.
     /// `rel_x/rel_y` are relative to the sidebar's left edge.
     /// Returns true if a message card was toggled (needs redraw).
-    pub fn on_sidebar_click(&mut self, rel_x: f32, rel_y: f32, height: f32) -> bool {
+    pub fn on_sidebar_click(&mut self, _rel_x: f32, rel_y: f32, height: f32) -> bool {
         // If detail modal is open, any click dismisses it
         if self.expanded_msg_idx.is_some() {
             self.expanded_msg_idx = None;

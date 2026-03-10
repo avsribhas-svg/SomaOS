@@ -3,7 +3,7 @@
 /// Scans /dev/input/event* for keyboard and pointer devices, reads
 /// events non-blocking, and converts them to our backend::event types.
 use crate::backend::event::{InputEvent, KeyCode, MouseBtn};
-use evdev::{Device, EventType, InputEventKind, Key, RelativeAxisType};
+use evdev::{Device, InputEventKind, Key, RelativeAxisType};
 use std::path::PathBuf;
 
 pub struct EvdevInput {
