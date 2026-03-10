@@ -1,0 +1,18 @@
+[Unit]
+Description=Ollama LLM Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ollama serve
+Restart=always
+RestartSec=5
+Environment=OLLAMA_MODELS=/var/lib/soma/ollama-models
+Environment=OLLAMA_HOST=127.0.0.1:11434
+# GPU access
+SupplementaryGroups=video render
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,7 @@
 [Unit]
-Description=Soma Agent Daemon
-After=network.target
+Description=SomaOS Agent Daemon
+After=network.target soma-ollama.service
+Wants=soma-ollama.service
 
 [Service]
 Type=simple
@@ -8,6 +9,7 @@ ExecStart=/usr/bin/soma-agent
 Restart=always
 RestartSec=3
 Environment=RUST_LOG=info
+Environment=OLLAMA_URL=http://127.0.0.1:11434
 
 [Install]
 WantedBy=multi-user.target

@@ -1,5 +1,5 @@
-# SomaOS Buildroot defconfig
-# Bootable x86_64 Linux with systemd, Mesa, Wayland, GRUB2
+# SomaOS Buildroot defconfig — v0.8 Production Boot
+# Bootable x86_64 Linux: DRM/KMS compositor, systemd, no Wayland/X11 needed
 
 # Architecture
 BR2_x86_64=y
@@ -14,7 +14,7 @@ BR2_LINUX_KERNEL_USE_DEFCONFIG=y
 BR2_LINUX_KERNEL_DEFCONFIG="x86_64"
 BR2_LINUX_KERNEL_INSTALL_TARGET=y
 
-# Bootloader — GRUB2 for BIOS boot (VirtualBox default)
+# Bootloader — GRUB2 for BIOS boot (VirtualBox / QEMU default)
 BR2_TARGET_GRUB2=y
 BR2_TARGET_GRUB2_I386_PC=y
 BR2_TARGET_GRUB2_BUILTIN_MODULES_PC="boot linux ext2 fat part_msdos part_gpt normal biosdisk"
@@ -23,27 +23,25 @@ BR2_TARGET_GRUB2_BUILTIN_MODULES_PC="boot linux ext2 fat part_msdos part_gpt nor
 BR2_INIT_SYSTEMD=y
 BR2_PACKAGE_SYSTEMD_LOGIND=y
 
-# Filesystem — ext4 root image (will be used as a VM disk)
+# Filesystem — ext4 root image (VM disk, 4 GB for model storage)
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
-BR2_TARGET_ROOTFS_EXT2_SIZE="1G"
+BR2_TARGET_ROOTFS_EXT2_SIZE="4G"
 
-# Graphics
+# Graphics — DRM/KMS (no X11, no Wayland server needed)
+BR2_PACKAGE_LIBDRM=y
 BR2_PACKAGE_MESA3D=y
 BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_SWRAST=y
 BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_VIRGL=y
 BR2_PACKAGE_MESA3D_OPENGL_EGL=y
-BR2_PACKAGE_MESA3D_OPENGL_ES=y
-BR2_PACKAGE_LIBDRM=y
 
-# Wayland
-BR2_PACKAGE_WAYLAND=y
-BR2_PACKAGE_WAYLAND_PROTOCOLS=y
-
-# Input
-BR2_PACKAGE_LIBINPUT=y
-BR2_PACKAGE_LIBXKBCOMMON=y
+# Input — evdev (direct kernel input, no libinput daemon needed)
 BR2_PACKAGE_EUDEV=y
+
+# Audio — for future voice input/output
+BR2_PACKAGE_ALSA_LIB=y
+BR2_PACKAGE_ALSA_UTILS=y
+BR2_PACKAGE_ESPEAK_NG=y
 
 # Fonts (for cosmic-text rendering)
 BR2_PACKAGE_DEJAVU=y
@@ -58,17 +56,18 @@ BR2_PACKAGE_NANO=y
 BR2_PACKAGE_HTOP=y
 BR2_PACKAGE_LIBCURL=y
 BR2_PACKAGE_CA_CERTIFICATES=y
+BR2_PACKAGE_WGET=y
 
 # Root filesystem overlay
 BR2_ROOTFS_OVERLAY="/opt/overlay"
 
-# Post-build script to set up auto-login and services
+# Post-build script
 BR2_ROOTFS_POST_BUILD_SCRIPT="/opt/post-build.sh"
 
-# Root password (for dev/testing)
+# Root password (login screen enforces this via /etc/soma/passwd)
 BR2_TARGET_GENERIC_ROOT_PASSWD="soma"
 BR2_TARGET_GENERIC_HOSTNAME="somaos"
-BR2_TARGET_GENERIC_ISSUE="Welcome to SomaOS"
+BR2_TARGET_GENERIC_ISSUE="SomaOS v0.8"
 
-# TTY / console
-BR2_TARGET_GENERIC_GETTY_PORT="tty1"
+# Console — serial for debug, tty1 for compositor
+BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"

@@ -1,6 +1,6 @@
 [Unit]
-Description=Soma Compositor
-After=soma-agent.service
+Description=SomaOS Compositor (DRM/KMS bare metal)
+After=soma-agent.service systemd-logind.service
 Wants=soma-agent.service
 
 [Service]
@@ -9,8 +9,19 @@ ExecStart=/usr/bin/soma-compositor
 Restart=always
 RestartSec=3
 Environment=RUST_LOG=info
-# Run on the DRM device
-Environment=WAYLAND_DISPLAY=wayland-0
+Environment=SOMA_WHISPER_BIN=/usr/local/bin/whisper-cli
+Environment=SOMA_WHISPER_MODEL=/var/lib/soma/ggml-tiny.bin
+# DRM master requires running on a VT
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+# Device group access
+SupplementaryGroups=video input audio
+# Mild RT priority for frame pacing
+LimitRTPRIO=20
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target

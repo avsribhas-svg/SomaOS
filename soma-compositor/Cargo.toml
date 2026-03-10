@@ -2,7 +2,12 @@
 name = "soma-compositor"
 version = "0.1.0"
 edition = "2021"
-description = "SomaOS Compositor — Smithay-based Wayland compositor with agent sidebar"
+description = "SomaOS Compositor — DRM/KMS native compositor with agent sidebar"
+
+[features]
+default = ["winit-backend"]
+winit-backend = ["winit", "softbuffer"]
+drm-backend = ["drm", "evdev", "memmap2"]
 
 [dependencies]
 soma-common = { path = "../soma-common" }
@@ -10,9 +15,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 
-# Graphics & windowing (dev mode)
-winit = { version = "0.30", features = ["wayland", "x11"] }
-softbuffer = "0.4"
+# Graphics — always needed
 tiny-skia = "0.11"
 
 # Text rendering
@@ -32,3 +35,12 @@ libc = "0.2"
 # Image previews
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 base64 = "0.22"
+
+# Windowing — dev mode (macOS / X11 / Wayland)
+winit = { version = "0.30", features = ["wayland", "x11"], optional = true }
+softbuffer = { version = "0.4", optional = true }
+
+# DRM/KMS — bare metal Linux production
+drm = { version = "0.14", optional = true }
+evdev = { version = "0.12", optional = true }
+memmap2 = { version = "0.9", optional = true }

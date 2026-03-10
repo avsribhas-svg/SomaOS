@@ -1,25 +1,37 @@
+mod backend;
+mod input;
 mod ipc_client;
+mod login;
 mod renderer;
 mod sidebar;
 mod terminal;
 
 use log::info;
+use login::{LoginResult, LoginScreen};
 use renderer::Renderer;
 use sidebar::Sidebar;
 use soma_common::CompositorMessage;
-use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 use terminal::Terminal;
+
+#[cfg(feature = "winit-backend")]
+use std::num::NonZeroU32;
+#[cfg(feature = "winit-backend")]
 use winit::application::ApplicationHandler;
+#[cfg(feature = "winit-backend")]
 use winit::dpi::{LogicalSize, PhysicalSize};
+#[cfg(feature = "winit-backend")]
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+#[cfg(feature = "winit-backend")]
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+#[cfg(feature = "winit-backend")]
 use winit::keyboard::{Key, ModifiersState, NamedKey};
+#[cfg(feature = "winit-backend")]
 use winit::window::{Window, WindowAttributes, WindowId};
 
 /// Which panel has keyboard focus
 #[derive(Clone, Copy, PartialEq)]
-enum FocusPanel {
+pub enum FocusPanel {
     Sidebar,
     Terminal,
 }
@@ -564,7 +576,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     info!("╔══════════════════════════════════════╗");
-    info!("║    SomaOS Compositor v0.6.0 (dev)    ║");
+    info!("║    SomaOS Compositor v0.8.0          ║");
     info!("╚══════════════════════════════════════╝");
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -572,7 +584,268 @@ fn main() {
         .build()
         .expect("Failed to create tokio runtime");
 
-    let event_loop = EventLoop::new().expect("Failed to create event loop");
-    let mut app = SomaApp::new(runtime.handle().clone());
-    event_loop.run_app(&mut app).expect("Event loop failed");
+    #[cfg(feature = "drm-backend")]
+    {
+        info!("Backend: DRM/KMS (bare metal)");
+        drm_main(runtime.handle().clone());
+    }
+
+    #[cfg(feature = "winit-backend")]
+    {
+        info!("Backend: winit (dev)");
+        let event_loop = EventLoop::new().expect("Failed to create event loop");
+        let mut app = SomaApp::new(runtime.handle().clone());
+        event_loop.run_app(&mut app).expect("Event loop failed");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DRM/KMS main loop
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(feature = "drm-backend")]
+fn drm_main(runtime: tokio::runtime::Handle) {
+    use backend::drm::DrmDisplay;
+    use input::EvdevInput;
+    use backend::event::{InputEvent, KeyCode, MouseBtn};
+    use std::time::{Duration, Instant};
+
+    let mut display = DrmDisplay::open().expect("Failed to open DRM display");
+    let mut evdev = EvdevInput::open(display.width, display.height);
+
+    let mut renderer = Renderer::new();
+    let mut sidebar = Sidebar::new();
+    let mut terminal = Terminal::new();
+    let mut login = LoginScreen::new();
+
+    let mut focus = FocusPanel::Sidebar;
+    let mut sidebar_width: f32 = 380.0;
+    let mut mouse_x = display.width as f32 / 2.0;
+    let mut mouse_y = display.height as f32 / 2.0;
+    let mut toasts: Vec<Toast> = Vec::new();
+
+    // IPC
+    let (agent_tx, agent_rx) = match runtime.block_on(ipc_client::connect_to_agent()) {
+        Ok((tx, rx)) => {
+            info!("Connected to soma-agent");
+            (Some(tx), Some(Arc::new(Mutex::new(rx))))
+        }
+        Err(e) => {
+            info!("Agent not available: {}", e);
+            (None, None)
+        }
+    };
+
+    let target_frame = Duration::from_millis(16); // ~60 fps
+    let mut last = Instant::now();
+
+    'main: loop {
+        let now = Instant::now();
+        let dt = now.duration_since(last).as_secs_f32().min(0.1);
+        last = now;
+
+        // ── Input ──────────────────────────────────────────────────────────
+        let events = evdev.poll();
+        mouse_x = evdev.mouse_x;
+        mouse_y = evdev.mouse_y;
+
+        for ev in events {
+            // Login intercepts everything until granted
+            if login.result != LoginResult::Granted {
+                match &ev {
+                    InputEvent::KeyPress { code, .. } => match code {
+                        KeyCode::Enter => login.on_submit(),
+                        KeyCode::Backspace => login.on_backspace(),
+                        KeyCode::Escape => {}
+                        KeyCode::Char(c) => login.on_char(*c),
+                        KeyCode::Space => login.on_char(' '),
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                continue;
+            }
+
+            // Normal compositor input
+            match ev {
+                InputEvent::KeyPress { code, .. } => {
+                    match code {
+                        KeyCode::F1 => {
+                            focus = match focus {
+                                FocusPanel::Sidebar => FocusPanel::Terminal,
+                                FocusPanel::Terminal => FocusPanel::Sidebar,
+                            };
+                        }
+                        KeyCode::Tab => {
+                            if focus == FocusPanel::Terminal {
+                                terminal.on_tab();
+                            } else {
+                                focus = FocusPanel::Terminal;
+                            }
+                        }
+                        KeyCode::Enter => match focus {
+                            FocusPanel::Sidebar => {
+                                if let Some(msg) = sidebar.on_submit() {
+                                    if let Some(tx) = &agent_tx { let _ = tx.send(msg); }
+                                }
+                            }
+                            FocusPanel::Terminal => terminal.on_submit(),
+                        },
+                        KeyCode::Backspace => match focus {
+                            FocusPanel::Sidebar => sidebar.on_backspace(),
+                            FocusPanel::Terminal => terminal.on_backspace(),
+                        },
+                        KeyCode::Escape => {
+                            if let Some(msg) = sidebar.on_reject() {
+                                if let Some(tx) = &agent_tx { let _ = tx.send(msg); }
+                            }
+                        }
+                        KeyCode::ArrowUp => { if focus == FocusPanel::Terminal { terminal.on_key_up(); } }
+                        KeyCode::ArrowDown => { if focus == FocusPanel::Terminal { terminal.on_key_down(); } }
+                        KeyCode::Space => match focus {
+                            FocusPanel::Sidebar => sidebar.on_char(' '),
+                            FocusPanel::Terminal => terminal.on_char(' '),
+                        },
+                        KeyCode::Char(c) => match focus {
+                            FocusPanel::Sidebar => sidebar.on_char(c),
+                            FocusPanel::Terminal => terminal.on_char(c),
+                        },
+                        KeyCode::Ctrl(c) => {
+                            if focus == FocusPanel::Terminal {
+                                match c {
+                                    'c' => terminal.on_ctrl_c(),
+                                    'd' => terminal.on_ctrl_d(),
+                                    'l' => terminal.on_ctrl_l(),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                InputEvent::MouseMove { x, y } => {
+                    mouse_x = x; mouse_y = y;
+                }
+                InputEvent::MouseButton { button: MouseBtn::Left, pressed: true } => {
+                    let div = display.width as f32 - sidebar_width;
+                    if mouse_x >= div {
+                        focus = FocusPanel::Sidebar;
+                        let h = display.height as f32;
+                        sidebar.on_sidebar_click(mouse_x - div, mouse_y, h);
+                    } else {
+                        focus = FocusPanel::Terminal;
+                    }
+                }
+                InputEvent::Scroll { delta_y } => {
+                    let div = display.width as f32 - sidebar_width;
+                    if mouse_x < div {
+                        terminal.scroll(delta_y);
+                    } else {
+                        sidebar.scroll(delta_y);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // ── Agent messages ─────────────────────────────────────────────────
+        if let Some(rx) = &agent_rx {
+            if let Ok(mut rx) = rx.try_lock() {
+                while let Ok(msg) = rx.try_recv() {
+                    match &msg {
+                        soma_common::AgentMessage::DirectOutput { result, .. } => {
+                            terminal.add_output(&result.stdout, &result.stderr);
+                        }
+                        soma_common::AgentMessage::ExecutionComplete { results, .. } => {
+                            let ok = results.iter().filter(|r| r.success).count();
+                            let total = results.len();
+                            let color = if ok == total { [74, 222, 128, 255] } else { [248, 113, 113, 255] };
+                            toasts.push(Toast { message: format!("Task done ({}/{})", ok, total), color, remaining: 3.5 });
+                        }
+                        soma_common::AgentMessage::Error { message, .. } => {
+                            toasts.push(Toast {
+                                message: format!("! {}", &message[..message.len().min(40)]),
+                                color: [248, 113, 113, 255],
+                                remaining: 3.5,
+                            });
+                        }
+                        _ => {}
+                    }
+                    sidebar.handle_agent_message(msg);
+                }
+            }
+        }
+
+        // ── Render ─────────────────────────────────────────────────────────
+        let w = display.width;
+        let h = display.height;
+        let mut pixmap = match tiny_skia::Pixmap::new(w, h) {
+            Some(p) => p,
+            None => continue,
+        };
+        pixmap.fill(tiny_skia::Color::from_rgba8(10, 10, 20, 255));
+
+        sidebar.update(dt);
+        terminal.update(dt);
+        toasts.retain_mut(|t| { t.remaining -= dt; t.remaining > 0.0 });
+
+        if login.result != LoginResult::Granted {
+            login.update(dt);
+            login.render(&mut renderer, &mut pixmap);
+        } else {
+            let wf = w as f32;
+            let hf = h as f32;
+            let div = wf - sidebar_width;
+
+            terminal.poll();
+            if div > 10.0 {
+                terminal.render(&mut renderer, &mut pixmap, 0.0, 0.0, div, hf);
+            }
+            sidebar.render(&mut renderer, &mut pixmap, div, hf);
+
+            // Divider
+            renderer.fill_rect(&mut pixmap, div - 1.0, 0.0, 2.0, hf, [255, 255, 255, 15]);
+
+            // HITL overlay
+            if sidebar.status == soma_common::AgentStatus::AwaitingApproval {
+                sidebar.render_approval_overlay(&mut renderer, &mut pixmap, wf, hf);
+            }
+
+            // Detail modal
+            if sidebar.expanded_msg_idx.is_some() {
+                sidebar.render_expanded_msg(&mut renderer, &mut pixmap, wf, hf);
+            }
+
+            // Toasts
+            let mut toast_y = 8.0_f32;
+            for toast in &toasts {
+                let alpha = if toast.remaining < 0.5 { (toast.remaining / 0.5 * 255.0) as u8 } else { 255 };
+                let tw = 260.0_f32.min(wf - 20.0);
+                let tx = wf - tw - 10.0;
+                renderer.fill_rounded_rect(&mut pixmap, tx, toast_y, tw, 28.0, 8.0,
+                    [toast.color[0], toast.color[1], toast.color[2], (alpha / 4).max(20)]);
+                renderer.draw_text(&mut pixmap, &toast.message, tx + 10.0, toast_y + 7.0, tw - 20.0, 10.0,
+                    [toast.color[0], toast.color[1], toast.color[2], alpha]);
+                toast_y += 34.0;
+            }
+        }
+
+        // Present to DRM
+        display.present(bytemuck_rgba(pixmap.data()));
+
+        // Frame pacing
+        let elapsed = Instant::now().duration_since(last);
+        if elapsed < target_frame {
+            std::thread::sleep(target_frame - elapsed);
+        }
+    }
+}
+
+/// Reinterpret tiny-skia's PremultipliedColorU8 slice as raw bytes.
+#[cfg(feature = "drm-backend")]
+fn bytemuck_rgba(pixels: &[tiny_skia::PremultipliedColorU8]) -> &[u8] {
+    // SAFETY: PremultipliedColorU8 is [u8;4], same layout as &[u8] with 4× len
+    unsafe {
+        std::slice::from_raw_parts(pixels.as_ptr() as *const u8, pixels.len() * 4)
+    }
 }
