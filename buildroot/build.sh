@@ -80,10 +80,22 @@ docker start -a "$CONTAINER_ID"
 # Extract built images
 echo ""
 echo "▸ Step 3: Extracting build artifacts..."
-docker cp "$CONTAINER_ID:/opt/buildroot/output/images/rootfs.ext4" "$OUTPUT_DIR/soma-os.img" 2>/dev/null || true
-docker cp "$CONTAINER_ID:/opt/buildroot/output/images/rootfs.iso9660" "$OUTPUT_DIR/soma-os.iso" 2>/dev/null || true
-docker cp "$CONTAINER_ID:/opt/buildroot/output/images/bzImage" "$OUTPUT_DIR/bzImage" 2>/dev/null || true
+# Copy the entire images/ directory so symlink targets are included
+mkdir -p "$OUTPUT_DIR/images-tmp"
+docker cp "$CONTAINER_ID:/opt/buildroot/output/images/." "$OUTPUT_DIR/images-tmp/"
 docker rm "$CONTAINER_ID" > /dev/null
+
+# Resolve rootfs — Buildroot may produce ext2, ext3, or ext4
+for ext in ext2 ext4 ext3; do
+    if [ -e "$OUTPUT_DIR/images-tmp/rootfs.$ext" ]; then
+        cp -L "$OUTPUT_DIR/images-tmp/rootfs.$ext" "$OUTPUT_DIR/soma-os.img"
+        echo "  rootfs format: $ext"
+        break
+    fi
+done
+cp -L "$OUTPUT_DIR/images-tmp/bzImage" "$OUTPUT_DIR/bzImage" 2>/dev/null || true
+cp -L "$OUTPUT_DIR/images-tmp/rootfs.iso9660" "$OUTPUT_DIR/soma-os.iso" 2>/dev/null || true
+rm -rf "$OUTPUT_DIR/images-tmp"
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
