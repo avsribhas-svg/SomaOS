@@ -55,6 +55,13 @@ if [ "$MODE" != "image-only" ]; then
 
     # Use Docker to cross-compile with musl for fully static binaries
     # This avoids glibc version mismatches with Buildroot's toolchain
+    if [ "$ARCH" = "aarch64" ]; then
+        CROSS_ENV="CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc \
+            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc"
+    else
+        CROSS_ENV=""
+    fi
+
     docker run --rm --platform linux/amd64 \
         -v "$PROJECT_DIR:/project" \
         -w /project \
@@ -63,6 +70,7 @@ if [ "$MODE" != "image-only" ]; then
             apt-get update -qq && apt-get install -y -qq \
                 musl-tools libdrm-dev libevdev-dev gcc-aarch64-linux-gnu > /dev/null 2>&1
             rustup target add $RUST_TARGET
+            export $CROSS_ENV
             # Agent: default features
             cargo build --release --target $RUST_TARGET \
                 -p soma-agent -p soma-cli 2>&1
