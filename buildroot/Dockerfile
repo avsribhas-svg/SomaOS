@@ -48,8 +48,9 @@ RUN wget -q https://buildroot.org/downloads/buildroot-2024.02.2.tar.gz \
     && rm buildroot-2024.02.2.tar.gz \
     && mv buildroot-2024.02.2 buildroot
 
-# Copy build configs
+# Copy build configs (both architectures)
 COPY soma_defconfig /opt/buildroot/configs/soma_defconfig
+COPY soma_aarch64_defconfig /opt/buildroot/configs/soma_aarch64_defconfig
 COPY post-build.sh /opt/post-build.sh
 RUN chmod +x /opt/post-build.sh
 
@@ -63,4 +64,5 @@ WORKDIR /opt/buildroot
 # Use Buildroot's own BR2_JLEVEL knob instead of top-level make jobserver flags.
 # This avoids nested kernel/header builds inheriting broken jobserver FDs under Docker.
 ENV SOMA_BUILD_JOBS=1
-CMD ["bash", "-lc", "make soma_defconfig && make BR2_JLEVEL=${SOMA_BUILD_JOBS}"]
+ENV SOMA_DEFCONFIG=soma_defconfig
+CMD ["bash", "-lc", "make ${SOMA_DEFCONFIG} && make BR2_JLEVEL=${SOMA_BUILD_JOBS}"]

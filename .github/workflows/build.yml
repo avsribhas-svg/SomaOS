@@ -9,6 +9,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 240  # 4 hour max
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+      fail-fast: false  # build both even if one fails
 
     steps:
       - uses: actions/checkout@v4
@@ -30,8 +34,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/docker-cache
-          key: docker-rust-${{ hashFiles('buildroot/build.sh') }}
-          restore-keys: docker-rust-
+          key: docker-rust-${{ matrix.arch }}-${{ hashFiles('buildroot/build.sh') }}
+          restore-keys: docker-rust-${{ matrix.arch }}-
 
       - name: Load cached Docker images
         run: |
@@ -39,9 +43,9 @@ jobs:
             docker load < /tmp/docker-cache/rust.tar
           fi
 
-      # Step 1: Cross-compile Rust binaries (native x86, no Rosetta)
+      # Step 1: Cross-compile Rust binaries
       - name: Compile Rust binaries
-        run: cd buildroot && ./build.sh --rust-only
+        run: cd buildroot && ./build.sh --rust-only --arch=${{ matrix.arch }}
         env:
           SOMA_BUILD_JOBS: 4
 
@@ -53,25 +57,25 @@ jobs:
 
       # Step 2: Build OS image via Buildroot (4 parallel jobs)
       - name: Build OS image
-        run: cd buildroot && SOMA_BUILD_JOBS=4 ./build.sh --image-only
+        run: cd buildroot && ./build.sh --image-only --arch=${{ matrix.arch }}
         env:
           SOMA_BUILD_JOBS: 4
 
       # Compress — use gzip -c to handle symlinks safely
       - name: Compress image
         run: |
-          ls -lh buildroot/output/
-          gzip -c buildroot/output/soma-os.img > buildroot/output/soma-os.img.gz
-          ls -lh buildroot/output/soma-os.img.gz
+          ls -lh buildroot/output/${{ matrix.arch }}/
+          gzip -c buildroot/output/${{ matrix.arch }}/soma-os.img > buildroot/output/${{ matrix.arch }}/soma-os.img.gz
+          ls -lh buildroot/output/${{ matrix.arch }}/soma-os.img.gz
 
       # Upload as downloadable artifact (available for 14 days)
       - name: Upload soma-os image
         uses: actions/upload-artifact@v4
         with:
-          name: soma-os-x86_64-${{ github.sha }}
+          name: soma-os-${{ matrix.arch }}-${{ github.sha }}
           path: |
-            buildroot/output/soma-os.img.gz
-            buildroot/output/bzImage
+            buildroot/output/${{ matrix.arch }}/soma-os.img.gz
+            buildroot/output/${{ matrix.arch }}/kernel
           retention-days: 14
 
       # On tagged releases, also attach to GitHub Release
@@ -79,7 +83,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           gh release upload ${{ github.ref_name }} \
-            buildroot/output/soma-os.img.gz \
-            buildroot/output/bzImage
+            buildroot/output/${{ matrix.arch }}/soma-os.img.gz \
+            buildroot/output/${{ matrix.arch }}/kernel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
