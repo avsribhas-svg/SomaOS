@@ -57,12 +57,14 @@ jobs:
         env:
           SOMA_BUILD_JOBS: 4
 
-      # Compress — raw ext4 compresses well (~60-70% reduction)
+      # Compress — dereference symlinks first, then gzip
       - name: Compress image
         run: |
-          cd buildroot/output
-          gzip -6 soma-os.img
-          ls -lh
+          ls -lh buildroot/output/images/
+          cp -L buildroot/output/images/soma-os.img buildroot/output/soma-os.img
+          cp -L buildroot/output/images/bzImage buildroot/output/bzImage 2>/dev/null || true
+          gzip -6 buildroot/output/soma-os.img
+          ls -lh buildroot/output/
 
       # Upload as downloadable artifact (available for 14 days)
       - name: Upload soma-os image
