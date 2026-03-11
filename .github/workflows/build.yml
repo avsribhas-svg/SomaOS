@@ -57,14 +57,12 @@ jobs:
         env:
           SOMA_BUILD_JOBS: 4
 
-      # Compress — dereference symlinks first, then gzip
+      # Compress — use gzip -c to handle symlinks safely
       - name: Compress image
         run: |
-          ls -lh buildroot/output/images/
-          cp -L buildroot/output/images/soma-os.img buildroot/output/soma-os.img
-          cp -L buildroot/output/images/bzImage buildroot/output/bzImage 2>/dev/null || true
-          gzip -6 buildroot/output/soma-os.img
           ls -lh buildroot/output/
+          gzip -c buildroot/output/soma-os.img > buildroot/output/soma-os.img.gz
+          ls -lh buildroot/output/soma-os.img.gz
 
       # Upload as downloadable artifact (available for 14 days)
       - name: Upload soma-os image
