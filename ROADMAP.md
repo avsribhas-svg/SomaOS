@@ -40,13 +40,21 @@
 - Clickable error/result cards with detail modal
 - Three-layer intent pipeline (keyword preprocessor → LLM parse → JSON planner)
 
-### v0.8 — Bare-Metal Boot *(current)*
+### v0.8 — Bare-Metal Boot
 - DRM/KMS bare-metal backend (drm crate, dumb buffer, double-buffering)
 - evdev input (keyboard + mouse, exclusive grab from /dev/input)
 - Login screen (boots straight into Soma, reads /etc/soma/passwd)
 - Feature-gated builds: `winit-backend` (dev) / `drm-backend` (production)
 - Auto-start systemd services (Ollama, agent, compositor)
 - First-boot model pull (soma-first-boot.service)
+
+### v0.8.1 — Agent-Assisted Capability Authoring *(current)*
+- `meta` capability: `propose` (generate + save JSON capability definitions), `list_proposed`, `describe_gap`
+- `ScriptCapability`: runtime capabilities backed by shell-command templates (`{param}` substitution), loaded from `~/.soma/capabilities/*.json`
+- Registry auto-loads user-defined capabilities at startup — no rebuild required
+- Human-reviewed capability proposals: the full shell-command definition passes through the HITL gate before being saved to disk
+- The self-improvement loop: agent encounters a gap → proposes a capability → human approves via HITL → registry grows → agent's task coverage expands over time
+- `~/.soma/gaps.log`: agent records capability gaps it cannot fill, for human review
 
 ---
 
@@ -64,6 +72,13 @@
 - `soma-docs`: document editor with structured agent API (paragraphs, headings, tables)
 - Compositor multi-panel layout (terminal | browser | native app | sidebar)
 - App launcher driven by agent intent
+
+### v1.0.5 — Capability Registry Governance
+- Hot-reload: agent reloads user-defined capabilities without a full restart
+- Registry UI: compositor panel showing all capabilities (built-in + user-defined), with enable/disable and delete
+- Gap detection during task execution: when a step fails due to a missing capability, agent automatically proposes a fix and surfaces it for HITL review
+- Capability promotion: convert a stable JSON-defined capability into a built-in Rust capability via scaffolded code generation
+- Version tracking: each capability definition carries a version field; updates require fresh HITL approval
 
 ### v1.1 — Media + Generation
 - `soma-media`: image/video generation pipeline (local diffusion)

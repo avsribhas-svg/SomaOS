@@ -12,6 +12,7 @@
   <a href="#vision">Vision</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#capabilities">Capabilities</a> ·
+  <a href="#agent-assisted-capability-authoring">Self-Improvement</a> ·
   <a href="#getting-started">Getting Started</a> ·
   <a href="ROADMAP.md">Roadmap</a>
 </p>
@@ -47,7 +48,7 @@ Current state (v0.8): SomaOS runs as a bootable Linux image with a custom bare-m
 The system provides:
 - A **custom DRM/KMS compositor** that renders directly to GPU framebuffer — no X11 or Wayland server required
 - A **login screen** that boots straight into Soma, with no traditional desktop
-- An **agent daemon** with 29 structured capability actions across 5 modules
+- An **agent daemon** with 32 structured capability actions across 8 modules (including meta + user-defined capabilities)
 - **On-device LLM** (qwen2.5-coder:7b via Ollama) with a three-layer intent pipeline for robust natural language understanding
 - A **Human-in-the-Loop (HITL) approval system** enforcing mandatory human review before any action
 - **Conversation memory** — the agent remembers recent exchanges for follow-up commands
@@ -79,7 +80,9 @@ The system provides:
 │  │  │ │ ├─process   │ │  │  ├──────────────────┤  │  │   │
 │  │  │ │ ├─system    │ │  │  │  HITL Overlay    │  │  │   │
 │  │  │ │ ├─network   │ │  │  └──────────────────┘  │  │   │
-│  │  │ │ └─package   │ │  │                        │  │   │
+│  │  │ │ ├─package   │ │  │                        │  │   │
+│  │  │ │ ├─meta      │ │  │                        │  │   │
+│  │  │ │ └─[user]    │ │  │                        │  │   │
 │  │  │ └─────────────┘ │  │  evdev input           │  │   │
 │  │  └─────────────────┘  │  /dev/dri/card0        │  │   │
 │  │                       └────────────────────────┘  │   │
@@ -198,6 +201,83 @@ All paths support `~` expansion.
 | `remove` | Remove a package | High |
 
 Auto-detects package manager: `brew`, `apt`, `apk`, `dnf`, `pacman`.
+
+### Meta (3 actions)
+
+| Action | Description | Risk |
+|--------|-------------|------|
+| `propose` | Propose a new shell-backed capability; saves JSON definition to `~/.soma/capabilities/` after HITL approval | Medium |
+| `list_proposed` | List all user-defined capabilities currently on disk | Low |
+| `describe_gap` | Record a capability gap to `~/.soma/gaps.log` for later review | Low |
+
+### User-Defined Capabilities (dynamic)
+
+Any JSON files in `~/.soma/capabilities/` are loaded at agent startup as **ScriptCapabilities** — shell-command-backed capabilities proposed by the agent and approved by the human. These appear in the capability registry and are available to the LLM exactly like built-in capabilities.
+
+---
+
+## Agent-Assisted Capability Authoring
+
+SomaOS is designed to improve itself over time. When the agent encounters a task it cannot complete with existing capabilities, it can propose a new one — and the human approves it through the same HITL gate used for every other action.
+
+### The self-improvement loop
+
+```
+1. Human: "I want you to be able to compress PDFs"
+2. Agent: generates a capability definition (name, actions, shell templates)
+3. HITL: human reviews the full definition before it is saved
+4. Human approves → capability saved to ~/.soma/capabilities/compress_pdf.json
+5. Agent restarts → new capability available in registry
+6. Agent: now uses compress_pdf for the current and all future tasks
+```
+
+The HITL gate is what makes this safe. The agent **proposes**, the human **decides**. Each new capability is a discrete, reviewable artifact (a JSON file with explicit shell commands) — not an opaque modification. The human can inspect exactly what the capability does, and remove the JSON file at any time to revoke it.
+
+### Capability definition format
+
+User-defined capabilities are stored as JSON in `~/.soma/capabilities/`:
+
+```json
+{
+  "name": "compress_pdf",
+  "description": "Compress PDF files using Ghostscript",
+  "actions": [
+    {
+      "name": "compress",
+      "description": "Compress a PDF to reduce file size",
+      "params": [
+        { "name": "input",  "param_type": "string", "required": true, "description": "Input PDF path"  },
+        { "name": "output", "param_type": "string", "required": true, "description": "Output PDF path" }
+      ],
+      "shell_template": "gs -sDEVICE=pdfwrite -dNOPAUSE -dBATCH -sOutputFile={output} {input}"
+    }
+  ]
+}
+```
+
+`{param_name}` placeholders are substituted at execution time. The definition is validated before saving — unknown fields and missing required params are caught and surfaced to the human during review.
+
+### How the human's role shifts over time
+
+| Stage | Human role |
+|---|---|
+| Early | Writes capabilities in Rust; agent uses them |
+| Middle | Agent proposes capabilities; human reviews JSON and approves |
+| Later | Human specifies intent in natural language; agent handles implementation |
+| Mature | Human curates the registry; rarely touches implementation |
+
+The system gradually shifts the barrier to building software from **implementation skill** (writing Rust) to **specification skill** (knowing what you want and recognising good work). The registry grows through use, and the coverage of tasks the agent can handle without human intervention increases over time.
+
+### Activating a proposed capability
+
+After `meta.propose` saves a capability to disk, restart the agent to load it:
+
+```bash
+# From the terminal panel, or via the agent:
+systemctl restart soma-agent
+```
+
+Or tell the agent: _"restart the agent service"_ — it will use the `process` capability to do it.
 
 ---
 
@@ -425,12 +505,14 @@ Native OS Project/
 │       ├── executor.rs                 # Capability dispatch
 │       ├── ipc.rs                      # Unix socket server + conversation context
 │       └── capabilities/
-│           ├── mod.rs                  # Capability trait + registry
+│           ├── mod.rs                  # Capability trait + registry (loads built-in + user-defined)
 │           ├── filesystem.rs           # 9 actions (read_file supports image base64, ~ expansion)
 │           ├── process.rs              # 5 process management actions
 │           ├── system.rs               # 6 system info actions
 │           ├── network.rs              # 5 network diagnostic actions
-│           └── package.rs              # 4 package management actions
+│           ├── package.rs              # 4 package management actions
+│           ├── meta.rs                 # 3 actions: propose, list_proposed, describe_gap
+│           └── script.rs              # ScriptCapability: runtime caps from ~/.soma/capabilities/*.json
 │
 ├── soma-compositor/                    # Compositor binary
 │   └── src/
@@ -496,9 +578,22 @@ Two categories of applications need two different models:
 
 - **Type safety** — Each action validates parameters before execution
 - **Structured output** — Results are JSON, enabling rich UI (thumbnails, trees, line numbers)
-- **Extensibility** — New capabilities are just Rust structs implementing a trait
+- **Extensibility** — New capabilities are Rust structs implementing a trait (built-in) or JSON files with shell templates (user-defined)
 - **Auditability** — Every action logged with capability, action, and parameters
+- **Self-improvement** — The agent can propose new capabilities via `meta.propose`; the human approves through HITL; the registry grows over time
 - **Future AgentAPI parity** — The same structured-data philosophy will extend to application-level APIs
+
+### Why JSON-defined capabilities instead of requiring Rust for extensions?
+
+The built-in capabilities are compiled Rust — fast, type-safe, fully integrated. But requiring Rust for every extension creates a high floor: you need a compiler, a language, and a rebuild cycle.
+
+User-proposed capabilities use shell-command templates (`{param}` substitution) stored as JSON. This means:
+- **The agent can author them** — the LLM generates valid JSON; it cannot generate valid Rust without a compiler
+- **The human can read them** — a JSON file with explicit shell commands is reviewable in 30 seconds; a Rust module requires context
+- **No rebuild needed** — JSON capabilities load at agent startup; the iteration cycle is propose → approve → restart, not write → compile → deploy
+- **The same HITL gate applies** — the human reviews the shell commands before they are saved, not after
+
+When a use case proves stable and performance matters, a JSON capability can be promoted to a built-in Rust capability. The JSON definition serves as the spec.
 
 ### Why a three-layer intent pipeline?
 

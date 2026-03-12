@@ -4,9 +4,11 @@ use std::collections::HashMap;
 
 pub mod browser;
 pub mod filesystem;
+pub mod meta;
 pub mod network;
 pub mod package;
 pub mod process;
+pub mod script;
 pub mod system;
 pub mod vision;
 
@@ -44,12 +46,38 @@ impl CapabilityRegistry {
         registry.register(Box::new(package::PackageCapability));
         registry.register(Box::new(browser::BrowserCapability));
         registry.register(Box::new(vision::VisionCapability));
+        registry.register(Box::new(meta::MetaCapability));
+
+        // Load any user-proposed capabilities from ~/.soma/capabilities/
+        registry.load_user_capabilities();
 
         registry
     }
 
     fn register(&mut self, cap: Box<dyn Capability>) {
         self.capabilities.insert(cap.name().to_string(), cap);
+    }
+
+    /// Load JSON-defined ScriptCapabilities from ~/.soma/capabilities/.
+    /// Called at startup so user-proposed capabilities are available immediately.
+    pub fn load_user_capabilities(&mut self) {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let dir = std::path::PathBuf::from(home).join(".soma").join("capabilities");
+        let Ok(entries) = std::fs::read_dir(&dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|x| x == "json").unwrap_or(false) {
+                match script::ScriptCapability::from_file(&path) {
+                    Ok(cap) => {
+                        log::info!("Loaded user capability '{}' from {:?}", cap.name(), path);
+                        self.register(Box::new(cap));
+                    }
+                    Err(e) => {
+                        log::warn!("Skipping {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
     }
 
     /// Execute a capability action
