@@ -13,7 +13,7 @@
   <a href="#architecture">Architecture</a> ·
   <a href="#capabilities">Capabilities</a> ·
   <a href="#getting-started">Getting Started</a> ·
-  <a href="#roadmap">Roadmap</a>
+  <a href="ROADMAP.md">Roadmap</a>
 </p>
 
 <p align="center">
@@ -337,7 +337,7 @@ Every push to `main` automatically builds a bootable image via GitHub Actions (n
 1. Go to [Actions](https://github.com/avsribhas-svg/SomaOS/actions/workflows/build.yml) → click the latest passing run
 2. Download `soma-os-x86_64-<sha>.zip` from **Artifacts**
 3. Extract → `gunzip soma-os.img.gz`
-4. Follow the VirtualBox setup in [docs/WINDOWS_BUILD.md](docs/WINDOWS_BUILD.md) (skip the build steps)
+4. Follow the VirtualBox setup in [docs/BUILD_x86_64.md](docs/BUILD_x86_64.md) (skip the build steps)
 
 For tagged releases, images are also attached directly to the [GitHub Release](https://github.com/avsribhas-svg/SomaOS/releases).
 
@@ -366,43 +366,28 @@ cargo run -p soma-compositor
 cargo run -p soma-cli
 ```
 
-### VM Build — Mac + VMware Fusion
+### VM Build — Apple Silicon Mac (UTM, ARM64)
 
 ```bash
-# Prerequisites: Docker Desktop running, VMware Fusion installed
-brew install qemu
-
-# Build OS image (~40 min first time)
-git clone git@github.com:avsribhas-svg/SomaOS.git && cd SomaOS
-chmod +x buildroot/build.sh buildroot/post-build.sh
-cd buildroot && ./build.sh
-
-# Convert to VMDK
-qemu-img convert -f raw -O vmdk buildroot/output/soma-os.img ~/Desktop/soma-os.vmdk
+cd buildroot && ./build.sh --arch=aarch64
+# Output: buildroot/output/aarch64/soma-os.img + kernel
 ```
 
-VMware Fusion → New → Custom VM → Linux (Other 64-bit) → Use existing disk → select `soma-os.vmdk`
-Settings: 4096 MB RAM, 2 CPUs, NAT network, 3D acceleration on.
+UTM → New → Virtualize → Linux → point Kernel at `output/aarch64/kernel` → attach `soma-os.img` as VirtIO drive → Display: **virtio-gpu-gl**.
 
-### VM Build — Windows (WSL2) + VirtualBox
+See [docs/BUILD_ARM64.md](docs/BUILD_ARM64.md) for the full setup guide.
+
+### VM Build — Windows (WSL2) + VirtualBox, or Linux/Intel Mac (QEMU)
 
 ```bash
-# In WSL2 terminal
-sudo apt install -y git qemu-utils
-git clone git@github.com:avsribhas-svg/SomaOS.git && cd SomaOS
-chmod +x buildroot/build.sh buildroot/post-build.sh
-cd buildroot && ./build.sh
-
-# Convert and copy to Windows Desktop
-qemu-img convert -f raw -O vmdk \
-  buildroot/output/soma-os.img \
-  /mnt/c/Users/$USER/Desktop/soma-os.vmdk
+cd buildroot && ./build.sh --arch=x86_64
+# Output: buildroot/output/x86_64/soma-os.img
 ```
 
-VirtualBox → New → Linux (Other 64-bit, 64-bit) → 4096 MB → Use existing disk → `soma-os.vmdk`
-Settings → Display: **VMSVGA**, 128 MB VRAM, 3D acceleration on.
+Windows: convert to VDI in PowerShell, create a VirtualBox VM with **VMSVGA** display, 128 MB VRAM, 4 GB RAM.
+Linux / Intel Mac: run directly with `qemu-system-x86_64`.
 
-See [docs/WINDOWS_BUILD.md](docs/WINDOWS_BUILD.md) for the full setup guide.
+See [docs/BUILD_x86_64.md](docs/BUILD_x86_64.md) for the full setup guide.
 
 ### Iterative Dev (fastest loop — no image rebuild)
 
@@ -466,7 +451,8 @@ Native OS Project/
 │   └── src/main.rs
 │
 ├── docs/
-│   └── WINDOWS_BUILD.md               # Full VirtualBox/VMware setup guide for Windows
+│   ├── BUILD_x86_64.md                # x86_64 build guide (Windows/WSL2 + VirtualBox, Linux/QEMU)
+│   └── BUILD_ARM64.md                 # ARM64 build guide (Apple Silicon + UTM)
 │
 ├── .github/
 │   └── workflows/
@@ -485,94 +471,6 @@ Native OS Project/
             ├── soma-compositor.service # Compositor on tty1 (after agent)
             └── soma-first-boot.service # One-shot: pulls qwen2.5-coder:7b on first boot
 ```
-
----
-
-## Roadmap
-
-### v0.1 — Foundation ✅
-- [x] Rust workspace with 3 crates
-- [x] Software-rendered compositor (winit + tiny-skia)
-- [x] Agent daemon with Ollama integration
-- [x] HITL approval modal
-- [x] Buildroot image pipeline
-
-### v0.2 — Capability System ✅
-- [x] Structured capability modules (filesystem, process, system)
-- [x] Capability registry with dynamic LLM prompt generation
-- [x] soma-cli test client
-- [x] musl static linking for cross-compilation
-
-### v0.3 — Compositor Chat UI ✅
-- [x] Chat-style sidebar with user bubbles and agent cards
-- [x] Agent connection from compositor
-
-### v0.4 — UI Polish ✅
-- [x] Right-side sidebar layout
-- [x] Scrollable message history
-- [x] Rich result cards
-- [x] Agent-triggered redraws
-
-### v0.5 — Smarter Agent ✅
-- [x] Network + package capabilities
-- [x] Conversation context memory (5 exchanges)
-- [x] LLM: qwen2.5-coder:7b
-- [x] Few-shot examples in system prompt
-
-### v0.6 — Rich Compositor ✅
-- [x] Real PTY terminal (nix, connected to live shell)
-- [x] Click-to-focus panels
-- [x] Resizable panels (drag divider)
-- [x] Toast notifications
-- [x] Trackpad scroll
-
-### v0.7 — Multimodal Previews ✅
-- [x] Image thumbnails in result cards (base64 IPC → tiny-skia draw_pixmap)
-- [x] Text file preview with line numbers and file stats
-- [x] Directory tree view with sizes
-- [x] Tilde expansion for all filesystem paths
-- [x] Clickable error/result cards with detail modal
-- [x] Three-layer intent pipeline (keyword preprocessor → LLM parse → JSON planner)
-
-### v0.8 — VM Production Boot ✅
-- [x] DRM/KMS bare-metal backend (drm crate, dumb buffer, double-buffering)
-- [x] evdev input (keyboard + mouse direct from /dev/input)
-- [x] Login screen (boots straight into Soma, reads /etc/soma/passwd)
-- [x] Feature-gated builds: `winit-backend` (dev) / `drm-backend` (production)
-- [x] soma-ollama.service auto-start
-- [x] soma-first-boot.service (one-shot model pull on first boot)
-- [x] 4 GB rootfs, ALSA + espeak-ng in Buildroot image
-
-### v0.9 — Browser Panel + Vision
-- [ ] Embed WebKitGTK offscreen into compositor framebuffer (no Wayland/X11 needed)
-- [ ] `browser` agent capability: navigate, query_selector, eval, screenshot_region
-- [ ] Vision fallback: multimodal LLM (qwen2.5-vl or llava) for unknown UIs
-- [ ] Basic tab management in compositor browser panel
-
-### v1.0 — Native App Framework
-- [ ] `AgentAPI` trait in soma-common: `describe_state`, `execute_action`, `subscribe_changes`
-- [ ] `soma-sheets`: spreadsheet with full agent read/write API (cells, formulas, ranges)
-- [ ] `soma-docs`: document editor with structured agent API (paragraphs, headings, tables)
-- [ ] Compositor multi-panel layout (terminal | browser | native app | sidebar)
-- [ ] App launcher driven by agent intent ("open a spreadsheet for this data")
-
-### v1.1 — Media + Generation
-- [ ] `soma-media`: image/video generation pipeline (local diffusion via Ollama or separate runtime)
-- [ ] Media result cards in sidebar (video playback, image gallery)
-- [ ] Agent capabilities: generate_image, generate_video, generate_audio
-
-### v1.2 — Federation
-- [ ] Network IPC: TCP/TLS transport wrapper over existing JSON socket protocol
-- [ ] Node registry: agents discover peers via config or DNS-SD
-- [ ] `delegate` capability: orchestrator sends task to remote node, streams results back
-- [ ] Unified HITL queue: all node approvals aggregated on orchestrator node
-- [ ] Node auth: token-based, scoped permissions per node
-
-### v2.0 — USB Bootable + Plugin API
-- [ ] USB installer (GRUB + EFI, fits on 8 GB USB)
-- [ ] Plugin API: third-party capabilities as shared Rust dylibs or WASM modules
-- [ ] Seccomp + AppArmor sandboxing per agent capability
-- [ ] OTA update system (delta images, signed, agent-driven)
 
 ---
 
