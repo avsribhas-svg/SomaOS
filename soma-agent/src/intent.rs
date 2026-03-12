@@ -75,13 +75,97 @@ fn preprocess_input(input: &str) -> Option<String> {
         || (s.contains("check") && s.contains("connection"))
         || (s.contains("test") && s.contains("connect"))
     {
-        // Extract a hostname-like token after common trigger words
         let target = extract_target(&s, &["reach", "ping", "connect to", "check connection to"]);
         let host = target.unwrap_or_else(|| "8.8.8.8".into());
         return Some(format!("ping {host}"));
     }
 
+    // ── Browser: navigate ─────────────────────────────────────────────────────
+    let nav_triggers = ["navigate to ", "go to ", "browse to ", "visit ", "open website "];
+    for trigger in &nav_triggers {
+        if let Some(pos) = s.find(trigger) {
+            let after = input[pos + trigger.len()..].trim();
+            if let Some(url) = extract_url(after) {
+                return Some(format!("navigate browser to {}", url));
+            }
+        }
+    }
+    // "open <domain>" where domain looks like a URL
+    if s.starts_with("open ") {
+        if let Some(url) = extract_url(&input[5..].trim()) {
+            return Some(format!("navigate browser to {}", url));
+        }
+    }
+
+    // ── Browser: web search ───────────────────────────────────────────────────
+    let search_web_triggers = [
+        "search the web for ", "search online for ", "google ", "look up online ",
+        "find on the internet ", "find online ", "search the internet for ",
+    ];
+    for trigger in &search_web_triggers {
+        if let Some(pos) = s.find(trigger) {
+            let query = input[pos + trigger.len()..].trim();
+            if !query.is_empty() {
+                return Some(format!("search the web for {}", query));
+            }
+        }
+    }
+    // "search <something>" when web context is clear
+    if (s.starts_with("search ") || s.starts_with("look up "))
+        && (s.contains("web") || s.contains("internet") || s.contains("online"))
+        && !s.contains("file") && !s.contains("folder") && !s.contains("directory")
+    {
+        let q = s
+            .trim_start_matches("search ")
+            .trim_start_matches("look up ")
+            .trim_start_matches("the web for ")
+            .trim_start_matches("online for ")
+            .trim_start_matches("on the web for ")
+            .trim_start_matches("on the internet for ");
+        if !q.is_empty() {
+            return Some(format!("search the web for {}", q));
+        }
+    }
+
+    // ── Browser: get page content ─────────────────────────────────────────────
+    let content_triggers = ["get content of ", "get the content of ", "read webpage ", "fetch webpage ", "scrape "];
+    for trigger in &content_triggers {
+        if let Some(pos) = s.find(trigger) {
+            let after = input[pos + trigger.len()..].trim();
+            if let Some(url) = extract_url(after) {
+                return Some(format!("get web content of {}", url));
+            }
+        }
+    }
+
     None // fall through to LLM
+}
+
+/// Extract the first URL-like token from a string.
+/// Returns None if the token doesn't look like a domain or URL.
+fn extract_url(text: &str) -> Option<String> {
+    let token = text
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(|c: char| matches!(c, ',' | '.' | '!' | '?' | ')' | ';'));
+    if token.is_empty() {
+        return None;
+    }
+    let looks_like_url = token.starts_with("http")
+        || token.contains(".com") || token.contains(".org") || token.contains(".net")
+        || token.contains(".io")  || token.contains(".gov") || token.contains(".edu")
+        || token.contains(".dev") || token.contains(".ai")  || token.contains(".co/")
+        || token.contains(".app");
+    if !looks_like_url {
+        return None;
+    }
+    let url = if token.starts_with("http") {
+        token.to_string()
+    } else {
+        format!("https://{}", token)
+    };
+    Some(url)
 }
 
 /// Pull the first token that looks like a hostname/IP after a trigger word.
@@ -104,56 +188,72 @@ fn extract_target(s: &str, triggers: &[&str]) -> Option<String> {
 //  description that Phase 2 (JSON planner) can reliably map to a capability.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const INTERPRET_SYSTEM_PROMPT: &str = r#"You are an intent interpreter for a system management agent.
-Your job is to translate vague, colloquial, or indirect user requests into a clear, specific description
-of what system action to take.
+const INTERPRET_SYSTEM_PROMPT: &str = r#"You are an intent interpreter for an AI agent that can control a computer AND browse the web.
+Translate vague or colloquial user requests into one clear sentence describing the action to take.
 
-Available system actions and their aliases:
-- CHECK DISK SPACE: "disk image", "how much space", "storage", "disk full", "free space", "how much room", "disk usage", "check disk"
-- CHECK MEMORY / RAM: "memory", "RAM", "how much memory", "memory usage", "RAM usage"
-- SYSTEM UPTIME: "uptime", "how long running", "since when", "boot time"
-- GET HOSTNAME: "hostname", "computer name", "machine name", "what is this machine", "server name"
-- LIST RUNNING PROCESSES: "running processes", "background tasks", "what's running", "active apps", "processes", "what processes", "CPU usage", "tasks"
-- KILL A PROCESS: "kill", "stop process", "end task", "terminate", "close app"
-- LIST FILES IN DIRECTORY: "list files", "browse", "what's in", "show folder", "directory contents", "ls", "show files", "what files"
-- READ FILE CONTENTS: "read file", "show file", "view file", "cat", "open file", "print file", "file contents", "what's in the file"
-- WRITE / CREATE FILE: "write file", "create file", "save content", "make file", "new file"
-- DELETE FILE OR FOLDER: "delete", "remove file", "trash", "rm", "wipe"
-- FIND FILES MATCHING PATTERN: "find file", "search for file", "locate file", "glob", "search files"
-- FILE METADATA / INFO: "file info", "file size", "permissions", "metadata", "when was modified"
-- COPY FILE: "copy file", "duplicate", "cp"
-- MOVE / RENAME FILE: "move file", "rename file", "mv"
-- CREATE DIRECTORY: "create folder", "make directory", "mkdir", "new folder"
-- LIST NETWORK INTERFACES: "network interfaces", "IP address", "what's my IP", "network config", "ifconfig", "ip addr", "network info"
-- PING HOST: "ping", "check connection", "test connectivity", "can I reach", "is reachable", "latency to"
-- DNS LOOKUP: "DNS lookup", "resolve hostname", "what IP is", "nslookup", "dig"
-- CHECK IF PORT IS OPEN: "port check", "is port open", "check service", "is running on port"
-- DOWNLOAD URL / HTTP REQUEST: "download", "fetch URL", "curl", "HTTP request", "get URL", "wget"
-- LIST INSTALLED PACKAGES: "installed packages", "installed software", "what's installed", "list packages", "show packages"
-- INSTALL PACKAGE: "install package", "add software", "apt install", "brew install", "get package"
-- REMOVE / UNINSTALL PACKAGE: "remove package", "uninstall", "delete software", "purge"
-- UPDATE PACKAGES: "update packages", "upgrade software", "apt update", "brew update"
-- SEARCH FOR PACKAGE: "search package", "find package", "is package available"
+Available actions:
+SYSTEM:
+- CHECK DISK SPACE: "disk usage", "free space", "how full", "storage"
+- CHECK MEMORY: "memory", "RAM", "how much memory"
+- UPTIME: "uptime", "how long running", "boot time"
+- HOSTNAME: "hostname", "computer name", "machine name"
+- KERNEL INFO: "kernel version", "OS info", "what OS"
+
+PROCESSES:
+- LIST PROCESSES: "running processes", "background tasks", "what's running", "active apps", "CPU usage"
+- KILL PROCESS: "kill", "stop process", "end task", "terminate"
+
+FILES:
+- LIST FILES: "list files", "what's in folder", "show directory", "ls"
+- READ FILE: "read file", "show file", "cat", "view file", "what's in the file"
+- WRITE FILE: "write file", "create file", "save", "make file"
+- DELETE: "delete", "remove", "trash", "nuke", "rm", "wipe"
+- FIND FILES: "find file", "search for file", "locate", "glob"
+- COPY FILE: "copy", "duplicate", "cp"
+- MOVE/RENAME: "move", "rename", "mv"
+- CREATE FOLDER: "create folder", "mkdir", "new folder"
+
+NETWORK:
+- LIST INTERFACES: "network interfaces", "IP address", "what's my IP", "ifconfig"
+- PING: "ping", "can I reach", "check connection", "test connectivity", "is reachable"
+- DNS LOOKUP: "DNS lookup", "resolve hostname", "nslookup"
+- PORT CHECK: "is port open", "check service on port"
+- HTTP REQUEST: "curl", "fetch URL", "HTTP request", "download URL"
+
+PACKAGES:
+- LIST PACKAGES: "installed software", "what's installed", "list packages"
+- INSTALL: "install package", "brew install", "apt install"
+- REMOVE: "uninstall", "remove package"
+- SEARCH PACKAGE: "find package", "is package available"
+
+BROWSER (use these for anything web/internet related):
+- NAVIGATE TO WEBSITE: "navigate to", "go to", "open", "browse to", "visit", "take me to", "load", "pull up"
+- SEARCH THE WEB: "search for", "google", "look up", "find online", "search the web", "search the internet", "what is", "who is", "how do I" (when clearly asking for web info)
+- GET PAGE CONTENT: "get content of website", "read webpage", "what does site say", "scrape", "fetch page"
+- SCREENSHOT WEBSITE: "screenshot of website", "capture webpage", "take screenshot of URL"
+
+VISION (use for image analysis):
+- ANALYZE IMAGE: "analyze image", "describe image", "what's in the image", "look at image", "read image", "what does image show"
 
 Rules:
-- ALWAYS pick the closest matching action from the list above.
-- If the request mentions "disk image" without clearly meaning a .iso/.img file, assume they mean disk space.
-- If the request is genuinely about something not in the list (e.g. playing music, opening a GUI app), say so clearly.
+- For ANY website/URL/domain (e.g. "github.com", "google.com"), use BROWSER actions.
+- For vague web queries ("what is X", "how does Y work"), use browser.search.
+- Never say "unsupported" for web browsing — the agent CAN browse the internet.
 - Respond with exactly ONE sentence starting with "The user wants to".
-- Be specific: include the target (path, hostname, process name, etc.) if mentioned.
+- Include the specific target (URL, query, path, hostname) in your response.
 
 Examples:
-Input: "check disk image"
-Output: The user wants to check disk space usage on the system.
-
-Input: "how full is my drive"
-Output: The user wants to check disk space usage on the system.
+Input: "navigate to github.com"
+Output: The user wants to navigate the browser to https://github.com.
 
 Input: "whats eating my ram"
-Output: The user wants to check memory/RAM usage on the system.
+Output: The user wants to check memory/RAM usage.
 
-Input: "are there any background tasks running"
-Output: The user wants to list all currently running processes.
+Input: "search the web for ollama models"
+Output: The user wants to search the web for "ollama models".
+
+Input: "what is rust programming language"
+Output: The user wants to search the web for "rust programming language".
 
 Input: "nuke /tmp/test.txt"
 Output: The user wants to delete the file at /tmp/test.txt.
@@ -161,8 +261,14 @@ Output: The user wants to delete the file at /tmp/test.txt.
 Input: "show me whats in the downloads folder"
 Output: The user wants to list files in ~/Downloads.
 
-Input: "can I reach github"
-Output: The user wants to ping github.com to check connectivity.
+Input: "go to news.ycombinator.com"
+Output: The user wants to navigate the browser to https://news.ycombinator.com.
+
+Input: "what does apple.com look like"
+Output: The user wants to navigate to https://apple.com and take a screenshot.
+
+Input: "analyze the image at /tmp/photo.png"
+Output: The user wants to analyze the image file at /tmp/photo.png using the vision model.
 
 RESPOND WITH EXACTLY ONE SENTENCE. NO OTHER TEXT."#;
 
@@ -184,10 +290,13 @@ Available capabilities:
 {capabilities_schema}
 Rules:
 - Delete/kill/remove package = "high" risk. Write/create/move/restart/install = "medium" risk. Read-only = "low" risk.
-- If unmappable: {{"intent":"unsupported","description":"Cannot perform this","steps":[],"risk_level":"low"}}
-- You may create multi-step plans with multiple steps when needed.
+- Browser and vision actions are always "low" risk.
+- NEVER return empty steps. If the user mentions a URL, domain, or web topic, use browser capability.
+- For web searches ("what is X", "find info on X"), use browser.search.
+- For visiting a URL/domain, use browser.navigate.
+- You may create multi-step plans (e.g. navigate + analyze image).
 - If conversation context is provided, use it to resolve references like "same", "that", "again", etc.
-- You will receive the original user text AND an interpreted intent — use the interpreted intent to guide your mapping.
+- Only use unsupported if it is truly impossible (e.g. "play music", "open GUI app").
 
 Examples:
 Input: "list files in /home"
@@ -205,17 +314,32 @@ Output: {{"intent":"delete_file","description":"Delete /tmp/test.txt","steps":[{
 Input: "ping google.com"
 Output: {{"intent":"ping_host","description":"Ping google.com","steps":[{{"capability":"network","action":"ping","params":{{"host":"google.com","count":4}},"description":"Ping google.com"}}],"risk_level":"low"}}
 
-Input: "what are my network interfaces"
-Output: {{"intent":"list_interfaces","description":"List network interfaces","steps":[{{"capability":"network","action":"ifconfig","params":{{}},"description":"List all network interfaces"}}],"risk_level":"low"}}
-
-Input: "list installed packages"
-Output: {{"intent":"list_packages","description":"List installed packages","steps":[{{"capability":"package","action":"list_installed","params":{{}},"description":"List all installed packages"}}],"risk_level":"low"}}
-
 Input: "check disk usage"
 Output: {{"intent":"check_disk","description":"Check disk usage","steps":[{{"capability":"system","action":"disk_usage","params":{{}},"description":"Check current disk usage"}}],"risk_level":"low"}}
 
-Input: "show memory info"
-Output: {{"intent":"memory_info","description":"Show system memory info","steps":[{{"capability":"system","action":"memory_info","params":{{}},"description":"Show memory usage"}}],"risk_level":"low"}}
+Input: "navigate to github.com"
+Output: {{"intent":"browse_website","description":"Navigate to github.com","steps":[{{"capability":"browser","action":"navigate","params":{{"url":"https://github.com"}},"description":"Open github.com in the browser"}}],"risk_level":"low"}}
+
+Input: "go to news.ycombinator.com"
+Output: {{"intent":"browse_website","description":"Navigate to Hacker News","steps":[{{"capability":"browser","action":"navigate","params":{{"url":"https://news.ycombinator.com"}},"description":"Open Hacker News"}}],"risk_level":"low"}}
+
+Input: "navigate browser to https://apple.com"
+Output: {{"intent":"browse_website","description":"Navigate to apple.com","steps":[{{"capability":"browser","action":"navigate","params":{{"url":"https://apple.com"}},"description":"Open apple.com in the browser"}}],"risk_level":"low"}}
+
+Input: "search the web for rust programming"
+Output: {{"intent":"web_search","description":"Search for rust programming","steps":[{{"capability":"browser","action":"search","params":{{"query":"rust programming"}},"description":"Search DuckDuckGo for rust programming"}}],"risk_level":"low"}}
+
+Input: "what is the latest news"
+Output: {{"intent":"web_search","description":"Search for latest news","steps":[{{"capability":"browser","action":"search","params":{{"query":"latest news today"}},"description":"Search the web for latest news"}}],"risk_level":"low"}}
+
+Input: "get web content of https://example.com"
+Output: {{"intent":"get_page_content","description":"Get content from example.com","steps":[{{"capability":"browser","action":"get_content","params":{{"url":"https://example.com"}},"description":"Fetch and extract page text"}}],"risk_level":"low"}}
+
+Input: "take a screenshot of wikipedia.org"
+Output: {{"intent":"screenshot_website","description":"Screenshot wikipedia.org","steps":[{{"capability":"browser","action":"screenshot","params":{{"url":"https://wikipedia.org"}},"description":"Take a headless screenshot of Wikipedia"}}],"risk_level":"low"}}
+
+Input: "analyze the image at /tmp/photo.png"
+Output: {{"intent":"analyze_image","description":"Analyze image file","steps":[{{"capability":"vision","action":"analyze_image","params":{{"path":"/tmp/photo.png"}},"description":"Analyze image using vision model"}}],"risk_level":"low"}}
 
 Input: "find all log files in /var and check disk usage"
 Output: {{"intent":"inspect_system","description":"Find log files and check disk usage","steps":[{{"capability":"filesystem","action":"find","params":{{"path":"/var","pattern":"*.log"}},"description":"Find .log files in /var"}},{{"capability":"system","action":"disk_usage","params":{{}},"description":"Check disk usage"}}],"risk_level":"low"}}

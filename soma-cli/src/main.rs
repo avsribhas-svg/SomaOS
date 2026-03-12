@@ -231,6 +231,11 @@ fn handle_agent_message(msg: AgentMessage) -> Option<String> {
             None
         }
 
+        AgentMessage::BrowserUpdate { url, title, .. } => {
+            println!("[Browser] {} — {}", title, url);
+            None
+        }
+
         AgentMessage::Pong => {
             println!("[Pong]");
             None

@@ -135,6 +135,12 @@ pub enum AgentMessage {
     Capabilities { capabilities: Vec<CapabilityInfo> },
     /// Direct command output (for terminal)
     DirectOutput { id: String, result: CommandResult },
+    /// Browser panel state update (URL navigated, screenshot ready)
+    BrowserUpdate {
+        url: String,
+        title: String,
+        screenshot_base64: Option<String>,
+    },
     /// Pong
     Pong,
 }

@@ -1,4 +1,5 @@
 mod backend;
+mod browser_panel;
 mod input;
 mod ipc_client;
 mod login;
@@ -6,6 +7,7 @@ mod renderer;
 mod sidebar;
 mod terminal;
 
+use browser_panel::BrowserPanel;
 use log::info;
 use renderer::Renderer;
 use sidebar::Sidebar;
@@ -38,6 +40,13 @@ pub enum FocusPanel {
     Terminal,
 }
 
+/// Which view is shown in the left (non-sidebar) area
+#[derive(Clone, Copy, PartialEq)]
+pub enum LeftPanel {
+    Terminal,
+    Browser,
+}
+
 /// Notification toast
 struct Toast {
     message: String,
@@ -57,7 +66,9 @@ struct SomaApp {
     renderer: Renderer,
     sidebar: Sidebar,
     terminal: Terminal,
+    browser_panel: BrowserPanel,
     focus: FocusPanel,
+    left_panel: LeftPanel,
     // IPC
     agent_tx: Option<ipc_client::AgentSender>,
     agent_rx: Option<Arc<Mutex<ipc_client::AgentReceiver>>>,
@@ -83,7 +94,9 @@ impl SomaApp {
             renderer: Renderer::new(),
             sidebar: Sidebar::new(),
             terminal: Terminal::new(),
+            browser_panel: BrowserPanel::new(),
             focus: FocusPanel::Sidebar,
+            left_panel: LeftPanel::Terminal,
             agent_tx: None,
             agent_rx: None,
             runtime,
@@ -167,6 +180,19 @@ impl SomaApp {
                         [248, 113, 113, 255],
                     );
                 }
+                soma_common::AgentMessage::BrowserUpdate {
+                    url,
+                    title,
+                    screenshot_base64,
+                } => {
+                    self.browser_panel.update(
+                        url.clone(),
+                        title.clone(),
+                        screenshot_base64.as_deref(),
+                    );
+                    // Auto-switch the left panel to Browser so the user sees the page.
+                    self.left_panel = LeftPanel::Browser;
+                }
                 _ => {}
             }
             self.sidebar.handle_agent_message(msg);
@@ -231,13 +257,31 @@ impl SomaApp {
 
         // Layout
         let divider = self.divider_x(w);
-        let term_w = divider;
+        let left_w = divider;
         let sidebar_x = divider;
 
-        // Render terminal on the LEFT
-        if term_w > 10.0 {
-            self.terminal
-                .render(&mut self.renderer, &mut pixmap, 0.0, 0.0, term_w, h);
+        // Render left panel (Terminal or Browser)
+        if left_w > 10.0 {
+            match self.left_panel {
+                LeftPanel::Terminal => {
+                    self.terminal
+                        .render(&mut self.renderer, &mut pixmap, 0.0, 0.0, left_w, h);
+                }
+                LeftPanel::Browser => {
+                    self.browser_panel
+                        .render(&mut self.renderer, &mut pixmap, 0.0, 0.0, left_w, h);
+                    // F2 hint in bottom-left
+                    self.renderer.draw_text(
+                        &mut pixmap,
+                        "F2=Terminal",
+                        4.0,
+                        h - 14.0,
+                        80.0,
+                        8.0,
+                        [255, 255, 255, 40],
+                    );
+                }
+            }
         }
 
         // Render sidebar on the RIGHT
@@ -266,6 +310,23 @@ impl SomaApp {
                 self.renderer
                     .fill_rect(&mut pixmap, 0.0, 0.0, 2.0, h, focus_color);
             }
+        }
+
+        // Left panel tab indicator (top-left corner)
+        {
+            let tab_label = match self.left_panel {
+                LeftPanel::Terminal => "[T] Terminal  F2=Browser",
+                LeftPanel::Browser => "[B] Browser   F2=Terminal",
+            };
+            self.renderer.draw_text(
+                &mut pixmap,
+                tab_label,
+                6.0,
+                4.0,
+                200.0,
+                8.0,
+                [255, 255, 255, 30],
+            );
         }
 
         // HITL overlay
@@ -419,11 +480,19 @@ impl ApplicationHandler for SomaApp {
                         }
                     }
 
-                    // F1 toggles panels (always works)
+                    // F1 toggles keyboard focus between sidebar and terminal
                     Key::Named(NamedKey::F1) => {
                         self.focus = match self.focus {
                             FocusPanel::Sidebar => FocusPanel::Terminal,
                             FocusPanel::Terminal => FocusPanel::Sidebar,
+                        };
+                    }
+
+                    // F2 toggles left panel between Terminal and Browser
+                    Key::Named(NamedKey::F2) => {
+                        self.left_panel = match self.left_panel {
+                            LeftPanel::Terminal => LeftPanel::Browser,
+                            LeftPanel::Browser => LeftPanel::Terminal,
                         };
                     }
 
@@ -537,6 +606,7 @@ impl ApplicationHandler for SomaApp {
                                 // Start divider drag
                                 self.dragging_divider = true;
                             } else if self.mouse_x < div {
+                                // Left panel clicked: focus terminal (keyboard) regardless of view
                                 self.focus = FocusPanel::Terminal;
                             } else {
                                 self.focus = FocusPanel::Sidebar;
@@ -564,7 +634,10 @@ impl ApplicationHandler for SomaApp {
                     let total_w = win.inner_size().width as f32;
                     let div = self.divider_x(total_w);
                     if self.mouse_x < div {
-                        self.terminal.scroll(scroll_amount);
+                        match self.left_panel {
+                            LeftPanel::Terminal => self.terminal.scroll(scroll_amount),
+                            LeftPanel::Browser => self.browser_panel.scroll(scroll_amount),
+                        }
                     } else {
                         self.sidebar.scroll(scroll_amount);
                     }
@@ -581,7 +654,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     info!("╔══════════════════════════════════════╗");
-    info!("║    SomaOS Compositor v0.8.0          ║");
+    info!("║    SomaOS Compositor v0.9.0          ║");
     info!("╚══════════════════════════════════════╝");
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -621,9 +694,11 @@ fn drm_main(runtime: tokio::runtime::Handle) {
     let mut renderer = Renderer::new();
     let mut sidebar = Sidebar::new();
     let mut terminal = Terminal::new();
+    let mut browser_panel = BrowserPanel::new();
     let mut login = LoginScreen::new();
 
     let mut focus = FocusPanel::Sidebar;
+    let mut left_panel = LeftPanel::Terminal;
     let mut sidebar_width: f32 = 380.0;
     let mut mouse_x = display.width as f32 / 2.0;
     let mut mouse_y = display.height as f32 / 2.0;
@@ -679,6 +754,12 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                             focus = match focus {
                                 FocusPanel::Sidebar => FocusPanel::Terminal,
                                 FocusPanel::Terminal => FocusPanel::Sidebar,
+                            };
+                        }
+                        KeyCode::F2 => {
+                            left_panel = match left_panel {
+                                LeftPanel::Terminal => LeftPanel::Browser,
+                                LeftPanel::Browser => LeftPanel::Terminal,
                             };
                         }
                         KeyCode::Tab => {
@@ -746,7 +827,10 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                 InputEvent::Scroll { delta_y } => {
                     let div = display.width as f32 - sidebar_width;
                     if mouse_x < div {
-                        terminal.scroll(delta_y);
+                        match left_panel {
+                            LeftPanel::Terminal => terminal.scroll(delta_y),
+                            LeftPanel::Browser => browser_panel.scroll(delta_y),
+                        }
                     } else {
                         sidebar.scroll(delta_y);
                     }
@@ -775,6 +859,10 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                                 color: [248, 113, 113, 255],
                                 remaining: 3.5,
                             });
+                        }
+                        soma_common::AgentMessage::BrowserUpdate { url, title, screenshot_base64 } => {
+                            browser_panel.update(url.clone(), title.clone(), screenshot_base64.as_deref());
+                            left_panel = LeftPanel::Browser;
                         }
                         _ => {}
                     }
@@ -806,7 +894,15 @@ fn drm_main(runtime: tokio::runtime::Handle) {
 
             terminal.poll();
             if div > 10.0 {
-                terminal.render(&mut renderer, &mut pixmap, 0.0, 0.0, div, hf);
+                match left_panel {
+                    LeftPanel::Terminal => {
+                        terminal.render(&mut renderer, &mut pixmap, 0.0, 0.0, div, hf);
+                    }
+                    LeftPanel::Browser => {
+                        browser_panel.render(&mut renderer, &mut pixmap, 0.0, 0.0, div, hf);
+                        renderer.draw_text(&mut pixmap, "F2=Terminal", 4.0, hf - 14.0, 80.0, 8.0, [255, 255, 255, 40]);
+                    }
+                }
             }
             sidebar.render(&mut renderer, &mut pixmap, div, hf);
 

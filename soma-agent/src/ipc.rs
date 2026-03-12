@@ -203,6 +203,28 @@ async fn handle_message(
                         result: result.clone(),
                     };
                     send_message(&step_msg, writer).await;
+
+                    // If a browser action produced a screenshot, push a BrowserUpdate
+                    // so the compositor can refresh the browser panel immediately.
+                    if step.capability == "browser" && result.success {
+                        if result.data.get("screenshot_base64").is_some() {
+                            let browser_msg = AgentMessage::BrowserUpdate {
+                                url: result.data["url"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                                title: result.data["title"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                                screenshot_base64: result.data["screenshot_base64"]
+                                    .as_str()
+                                    .map(|s| s.to_string()),
+                            };
+                            send_message(&browser_msg, writer).await;
+                        }
+                    }
+
                     results.push(result);
                 }
 
