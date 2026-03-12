@@ -115,6 +115,22 @@ pub enum CompositorMessage {
         api_key: String,
         api_url: String,
     },
+    /// Desktop event observation (window focus/open/close) → agent observer
+    DesktopEvent {
+        event_type: String,   // "window_focused" | "window_opened" | "window_closed"
+        window_title: String,
+        timestamp: u64,
+    },
+    /// Mark recent desktop events as a named workflow
+    AnnotateWorkflow { name: String },
+    /// Observation enabled/disabled (private mode toggle)
+    PrivateModeChanged { active: bool },
+    /// A button was clicked in an agent-spawned DynamicApp window
+    DynamicAppAction {
+        app_id: String,
+        action_id: String,
+        window_id: u32,
+    },
     /// Ping / health check
     Ping,
 }
@@ -150,6 +166,26 @@ pub enum AgentMessage {
     },
     /// Active provider configuration was updated
     ConfigUpdated { provider: String, model: String },
+    /// Agent is starting desktop agent mode
+    AgentModeStarted { task: String },
+    /// Agent has finished desktop agent mode
+    AgentModeEnded,
+    /// Spawn a new DynamicApp floating window from a JSON widget tree
+    SpawnApp {
+        title: String,
+        app_id: String,
+        description: String,
+        widgets_json: String,
+    },
+    /// Patch widget state in an open DynamicApp window
+    UpdateAppWidget {
+        window_id: u32,
+        widget_updates: String,
+    },
+    /// Agent requests a desktop action (open/close/focus window, type text, click)
+    DesktopAction { action: String },
+    /// Update the menu bar activity strip text
+    ActivityUpdate { text: String },
     /// Pong
     Pong,
 }

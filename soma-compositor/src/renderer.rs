@@ -19,26 +19,47 @@ pub struct Theme {
     pub border: [u8; 4],           // Subtle border
     pub terminal_bg: [u8; 4],      // Terminal background
     pub terminal_text: [u8; 4],    // Terminal text
+    // Desktop environment chrome
+    pub bg_desktop: [u8; 4],       // Desktop wallpaper base
+    pub bg_window_chrome: [u8; 4], // Focused floating window bg
+    pub bg_window_inactive: [u8; 4], // Unfocused window bg
+    pub bg_titlebar: [u8; 4],      // Window title bar
+    pub bg_dock: [u8; 4],          // Dock pill bg
+    pub bg_menubar: [u8; 4],       // Menu bar bg
+    pub close_btn: [u8; 4],        // Traffic-light close button
+    pub close_btn_hover: [u8; 4],  // Close button hover
+    pub agent_active: [u8; 4],     // Agent mode glow / indicator
 }
 
 impl Theme {
     pub fn dark() -> Self {
         Self {
-            bg_primary: [10, 10, 20, 240],
-            bg_sidebar: [16, 16, 32, 245],
-            bg_surface: [30, 30, 55, 160],
-            bg_input: [40, 40, 65, 180],
-            bg_hover: [255, 255, 255, 10],
-            text_primary: [226, 232, 240, 255],
-            text_secondary: [148, 163, 184, 255],
-            text_muted: [100, 116, 139, 255],
-            accent: [129, 140, 248, 255],
-            success: [74, 222, 128, 255],
-            warning: [251, 191, 36, 255],
-            error: [248, 113, 113, 255],
-            border: [255, 255, 255, 15],
-            terminal_bg: [8, 8, 16, 250],
-            terminal_text: [180, 210, 180, 255],
+            // VS Code / IDE agent-style dark theme
+            bg_primary:     [30,  30,  30,  255], // #1E1E1E editor bg
+            bg_sidebar:     [37,  37,  38,  255], // #252526 panel bg
+            bg_surface:     [45,  45,  48,  240], // #2D2D30 card surface
+            bg_input:       [58,  58,  58,  235], // #3A3A3A input bg
+            bg_hover:       [255, 255, 255,  10],
+            text_primary:   [212, 212, 212, 255], // #D4D4D4 VS Code text
+            text_secondary: [150, 150, 150, 255], // #969696 secondary
+            text_muted:     [96,  96,  96,  255], // #606060 muted
+            accent:         [0,   122, 204, 255], // #007ACC VS Code blue
+            success:        [78,  201, 176, 255], // #4EC9B0 teal/green
+            warning:        [220, 220, 100, 255], // #DCDC64 yellow
+            error:          [244, 135, 113, 255], // #F48771 error
+            border:         [255, 255, 255,  18], // subtle separator
+            terminal_bg:    [22,  22,  22,  255],
+            terminal_text:  [204, 204, 204, 255],
+            // Desktop chrome
+            bg_desktop:         [18,  22,  30,  255],
+            bg_window_chrome:   [45,  47,  52,  255],
+            bg_window_inactive: [38,  40,  44,  255],
+            bg_titlebar:        [40,  42,  48,  255],
+            bg_dock:            [30,  32,  40,  220],
+            bg_menubar:         [20,  20,  26,  230],
+            close_btn:          [200, 70,  60,  255],
+            close_btn_hover:    [255, 95,  86,  255],
+            agent_active:       [0,   180, 255, 255],
         }
     }
 }

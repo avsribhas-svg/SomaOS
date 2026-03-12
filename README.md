@@ -11,6 +11,8 @@
 <p align="center">
   <a href="#vision">Vision</a> ·
   <a href="#architecture">Architecture</a> ·
+  <a href="#desktop-environment">Desktop</a> ·
+  <a href="#desktop-agent-mode">Agent Mode</a> ·
   <a href="#capabilities">Capabilities</a> ·
   <a href="#agent-assisted-capability-authoring">Self-Improvement</a> ·
   <a href="#getting-started">Getting Started</a> ·
@@ -43,13 +45,18 @@ This is a precedent system for future automation infrastructure. Instead of usin
 
 ## Abstract
 
-Current state (v0.9 + v0.8.1): SomaOS runs as a bootable Linux image with a custom bare-metal compositor.
+Current state (v1.0 in progress, v0.9 stable): SomaOS runs as a bootable Linux image with a custom bare-metal compositor.
 
 The system provides:
+- A **full macOS-style desktop environment** — floating windows, a centred dock, a menu bar, and an AI sidebar as a slide-in overlay. The terminal and browser are applications, not panels.
+- A **desktop agent mode** — the AI can take full control of the desktop (open/close/focus windows, type text, drive the browser) via IPC. Humans watch and can interrupt at any time through the HITL gate.
+- **Dynamic app spawning** — the agent creates new application windows at runtime with a declarative widget tree (Label, Button, ProgressBar, TextDisplay) — no Rust rebuild required.
+- **Workflow learning** — the compositor passively observes window focus and open/close events; humans or the agent can annotate sequences as named workflows persisted to `~/.soma/workflows.json`. Observation pauses automatically in private mode.
+- **Private mode** — one keystroke disables observation; the menu bar shows a `[pvt]` indicator. The agent still responds to prompts but learns nothing from the session.
 - A **custom DRM/KMS compositor** that renders directly to GPU framebuffer — no X11 or Wayland server required
 - A **login screen** that boots straight into Soma, with no traditional desktop
 - An **agent daemon** with 35 built-in capability actions across 9 modules, plus unlimited user-defined capabilities (loaded from `~/.soma/capabilities/*.json`)
-- **Browser panel** — headless Chromium integration with F2 toggle in compositor; agent can navigate, scrape, and screenshot
+- **Browser panel** — headless Chromium integration; agent can navigate, scrape, and screenshot. Browser opens as a floating window in the desktop environment.
 - **Vision capability** — image understanding via Ollama qwen2.5-vl:7b; agent can analyze images with natural language queries
 - **On-device LLM** (qwen2.5-coder:7b via Ollama) with a three-layer intent pipeline for robust natural language understanding
 - A **Human-in-the-Loop (HITL) approval system** enforcing mandatory human review before any action
@@ -65,35 +72,35 @@ The system provides:
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                      SomaOS Image                        │
-│  ┌───────────────────────────────────────────────────┐   │
-│  │                    systemd                        │   │
-│  │  ┌─────────────────┐  ┌────────────────────────┐  │   │
-│  │  │  soma-ollama    │  │   soma-compositor      │  │   │
-│  │  │  (LLM server)   │  │   (DRM/KMS backend)    │  │   │
-│  │  └────────┬────────┘  │                        │  │   │
-│  │           │           │  ┌──────────────────┐  │  │   │
-│  │  ┌────────┴────────┐  │  │  Login Screen    │  │  │   │
-│  │  │  soma-agent     │◄─┤  ├──────────────────┤  │  │   │
-│  │  │  (daemon)       │  │  │  Chat Sidebar    │  │  │   │
-│  │  │                 │  │  │  (right panel)   │  │  │   │
-│  │  │ ┌─────────────┐ │  │  ├──────────────────┤  │  │   │
-│  │  │ │Capabilities │ │  │  │  PTY Terminal OR │  │  │   │
-│  │  │ │ ├─filesystem│ │  │  │  Browser Panel   │  │  │   │
-│  │  │ │ ├─process   │ │  │  │  (left, F2 swap) │  │  │   │
-│  │  │ │ ├─system    │ │  │  ├──────────────────┤  │  │   │
-│  │  │ │ ├─network   │ │  │  │  HITL Overlay    │  │  │   │
-│  │  │ │ ├─package   │ │  │  └──────────────────┘  │  │   │
-│  │  │ │ ├─browser   │ │  │                        │  │   │
-│  │  │ │ ├─vision    │ │  │                        │  │   │
-│  │  │ │ ├─meta      │ │  │                        │  │   │
-│  │  │ │ └─[user]    │ │  │                        │  │   │
-│  │  │ └─────────────┘ │  │  evdev input           │  │   │
-│  │  └─────────────────┘  │  /dev/dri/card0        │  │   │
-│  │                       └────────────────────────┘  │   │
-│  └───────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                          SomaOS Image                            │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                         systemd                             │ │
+│  │  ┌─────────────────┐  ┌──────────────────────────────────┐  │ │
+│  │  │  soma-ollama    │  │         soma-compositor           │  │ │
+│  │  │  (LLM server)   │  │         (DRM/KMS backend)         │  │ │
+│  │  └────────┬────────┘  │                                  │  │ │
+│  │           │           │  Menu bar (28px): clock · AI      │  │ │
+│  │  ┌────────┴────────┐  │  ┌────────────────────────────┐  │  │ │
+│  │  │  soma-agent     │◄─┤  │  Floating Windows          │  │  │ │
+│  │  │  (daemon)       │  │  │  Terminal.app / Browser.app │  │  │ │
+│  │  │                 │  │  │  DynamicApp (agent-spawned) │  │  │ │
+│  │  │ ┌─────────────┐ │  │  ├────────────────────────────┤  │  │ │
+│  │  │ │Capabilities │ │  │  │  AI Sidebar (slide overlay) │  │  │ │
+│  │  │ │ ├─filesystem│ │  │  │  Chat · HITL · Workflow     │  │  │ │
+│  │  │ │ ├─process   │ │  │  ├────────────────────────────┤  │  │ │
+│  │  │ │ ├─system    │ │  │  │  Dock (72px)               │  │  │ │
+│  │  │ │ ├─network   │ │  │  │  Terminal · Browser · AI   │  │  │ │
+│  │  │ │ ├─package   │ │  │  ├────────────────────────────┤  │  │ │
+│  │  │ │ ├─browser   │ │  │  │  HITL Overlay              │  │  │ │
+│  │  │ │ ├─vision    │ │  │  └────────────────────────────┘  │  │ │
+│  │  │ │ ├─meta      │ │  │                                  │  │ │
+│  │  │ │ ├─desktop   │ │  │  evdev input / /dev/dri/card0    │  │ │
+│  │  │ │ └─[user]    │ │  └──────────────────────────────────┘  │ │
+│  │  │ └─────────────┘ │                                        │ │
+│  │  └─────────────────┘                                        │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### System Components
@@ -101,10 +108,139 @@ The system provides:
 | Component | Role | Technology |
 |-----------|------|------------|
 | **soma-common** | Shared types, IPC protocol, capability types | Rust, serde |
-| **soma-agent** | Intent parsing, capability execution, conversation context | Rust, reqwest, tokio |
-| **soma-compositor** | DRM/KMS display, chat UI, PTY terminal, login screen | Rust, drm, evdev, tiny-skia, cosmic-text |
+| **soma-agent** | Intent parsing, capability execution, conversation context, desktop observer | Rust, reqwest, tokio |
+| **soma-compositor** | DRM/KMS display, desktop environment, floating windows, dock, menu bar, sidebar overlay | Rust, drm, evdev, tiny-skia, cosmic-text |
 | **soma-cli** | Terminal test client for agent interaction | Rust, tokio |
 | **Buildroot Image** | Minimal Linux rootfs, bootloader, systemd services | Buildroot, GRUB2, systemd |
+
+---
+
+## Desktop Environment
+
+v1.0 replaces the fixed terminal+sidebar split with a full floating-window desktop. The AI and the human work in the same environment — the AI is a native user, not an external tool.
+
+```
+Menu bar: "Soma  ●  Researching competitor1.com...  [pvt]  10:42"
+┌─────────────────────────────────────────────────────────────────┐
+│                         Desktop wallpaper                        │
+│  ┌────────────────────────┐   ┌─────────────────────────────┐   │
+│  │  Terminal.app          │   │  Browser.app                │   │
+│  │  ●  ────────────────   │   │  ●  ──────────────────────  │   │
+│  │  $ cargo build         │   │  [competitor1.com]          │   │
+│  └────────────────────────┘   │  [screenshot content]       │   │
+│                               └─────────────────────────────┘   │
+│           ┌──────────────────────────────────────┐              │
+│           │  Competitor Summary (AI)             │              │
+│           │  Label: "Top 3 competitors..."       │              │
+│           │  [ Save as PDF ]  [ Open in Docs ]   │              │
+│           └──────────────────────────────────────┘              │
+│                                      ┌─────────────────────┐    │
+│                                      │   AI Sidebar        │    │
+│                                      │  (slide-in overlay) │    │
+│                                      └─────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
+       Dock:  [>_ Terminal]  [W Browser]  [AI Agent ●]  [>> Sidebar]  [PVT]
+```
+
+### Floating Windows
+
+- Each app (`Terminal`, `Browser`, or agent-spawned `DynamicApp`) lives in a draggable `FloatingWindow`
+- Window chrome: shadow, rounded body, title bar, traffic-light close button, centered title text
+- Agent-spawned windows show a small teal **AI** badge in the top-right of the title bar
+- Windows stack in focus order; clicking a window brings it to front
+
+### Dock
+
+- Always-visible 72px pill at the bottom of the screen
+- App launchers: **Terminal** (`>_`), **Browser** (`W`), **AI Agent** (`AI`), **Sidebar** (`>>`), **Private** (`PVT`)
+- Open-state indicator dots below each icon; agent-mode glow ring when active
+- Click to open/focus a window or toggle a mode
+
+### Menu Bar
+
+- Always-visible 28px bar at the top
+- Left: "Soma" label
+- Centre-right: coloured status dot + live activity text from the agent (truncated to fit)
+- Right: `[pvt]` indicator when private mode is on · clock
+- Status dot colour: green=idle, blue=thinking, bright-blue=executing, yellow=awaiting approval
+
+### AI Sidebar
+
+- Slide-in overlay panel (800px/s tween), not a fixed split — the desktop is always full-width
+- Toggled by clicking the Sidebar dock icon or pressing **Cmd+Space** (macOS) / **F3** (DRM)
+- Contains the full chat history, plan cards, result cards, HITL modal, and workflow annotation buttons
+
+---
+
+## Desktop Agent Mode
+
+Agent mode lets the AI take full control of the desktop — similar to ChatGPT Atlas, Gemini in Chrome, or Perplexity Comet. The human watches and can interrupt at any point via the HITL gate.
+
+### Entering Agent Mode
+
+```
+Human: "Research our top 3 competitors and make me a summary doc"
+Agent: "I'll take over. Starting agent mode."
+  → AgentModeStarted { task: "research competitors" }
+  → Dock AI icon glows blue · menu bar shows "● Researching competitors..."
+  → DesktopAction: "open_window:browser"
+  → DesktopAction: "type_text:competitor1.com"
+  → ActivityUpdate: "● Reading competitor1.com..."
+  → (navigate three competitors)
+  → SpawnApp { title: "Competitor Summary", widgets: [...] }
+  → New DynamicApp window appears with summary + action buttons
+  → AgentModeEnded
+  → Dock glow off · menu bar clears
+```
+
+### Desktop Actions (Agent → Compositor)
+
+| Action string | Effect |
+|---|---|
+| `open_window:terminal` | Open or focus the Terminal window |
+| `open_window:browser` | Open or focus the Browser window |
+| `focus_window:<title>` | Bring a named window to front |
+| `close_window:<title>` | Close a window by title |
+| `type_text:<text>` | Send text to the focused window's input |
+| `click:<x>,<y>` | Simulate a click at absolute screen coordinates |
+| `press_key:<key>` | Send a keypress to the focused window |
+
+### Dynamic App Spawning
+
+Agent sends `SpawnApp { title, app_id, widgets_json }` over IPC. The compositor creates a floating `DynamicApp` window from the widget tree with no Rust rebuild:
+
+```json
+{
+  "app_id": "competitor_summary",
+  "description": "Competitor research summary",
+  "widgets": [
+    { "type": "label",        "text": "Top 3 Competitors", "x": 16, "y": 16, "font_size": 14 },
+    { "type": "text_display", "content": "1. Acme Corp...", "x": 16, "y": 40, "w": 440, "h": 200 },
+    { "type": "button",       "text": "Save as PDF",       "x": 16, "y": 256, "w": 120, "h": 32, "action_id": "save_pdf" }
+  ]
+}
+```
+
+Widget button clicks send `DynamicAppAction { app_id, action_id, window_id }` back to the agent for handling.
+
+### Private Mode
+
+- **Cmd+Shift+P** (macOS) / **F5** (DRM) toggles private mode
+- Menu bar shows `[pvt]` indicator with a slightly dimmed tint
+- `PrivateModeChanged { active: true }` sent to agent → `DesktopObserver` deactivates → no events recorded
+- Agent still responds to explicit prompts; it does not learn from the session
+
+### Workflow Learning
+
+The compositor passively observes desktop events and the agent uses them to understand and eventually automate human workflows:
+
+- Events recorded: window focus changes, window open/close, text-input context (char count only — no actual text)
+- Observation pauses automatically in private mode
+- "Save as workflow" link appears below plan cards in the sidebar
+- Named workflows saved to `~/.soma/workflows.json`
+- Agent retrieves history via `desktop_agent.get_workflow_history` to reason about automation opportunities
+
+---
 
 ### Data Flow
 
@@ -342,6 +478,10 @@ Communication uses **newline-delimited JSON** over a **Unix domain socket** (`/t
 | `Approve` | `id` | User approved a pending task plan |
 | `Reject` | `id` | User rejected a pending task plan |
 | `DirectExec` | `id`, `command` | Execute a raw shell command |
+| `DesktopEvent` | `event_type`, `window_title`, `timestamp` | Window focus/open/close observation |
+| `AnnotateWorkflow` | `name` | Mark recent events as a named workflow |
+| `PrivateModeChanged` | `active` | Private mode toggled — disable/enable observer |
+| `DynamicAppAction` | `app_id`, `action_id`, `window_id` | Button clicked in a DynamicApp window |
 | `Ping` | — | Health check |
 
 #### Agent → Compositor Messages
@@ -354,30 +494,38 @@ Communication uses **newline-delimited JSON** over a **Unix domain socket** (`/t
 | `Error` | `id`, `message` | An error occurred |
 | `DirectOutput` | `id`, `result` | Terminal command output |
 | `BrowserUpdate` | `url`, `title`, `screenshot_base64` | Browser navigated to a new page |
+| `AgentModeStarted` | `task` | Agent is taking over the desktop |
+| `AgentModeEnded` | — | Agent has finished desktop control |
+| `SpawnApp` | `title`, `app_id`, `description`, `widgets_json` | Create a new DynamicApp window |
+| `UpdateAppWidget` | `window_id`, `widget_updates` | Patch widget state in an open DynamicApp |
+| `DesktopAction` | `action` | Drive the desktop (open/close/focus/type/click) |
+| `ActivityUpdate` | `text` | Update the menu bar activity strip |
 | `Pong` | — | Health check response |
 
 ### Rendering Pipeline
+
+Nine-layer compositor render order (back to front):
 
 ```
 DRM/KMS main loop (bare metal) OR winit event loop (dev)
   → tiny-skia Pixmap (software rasterization)
     → Login screen (if not yet authenticated)
       OR
-    → Terminal panel OR Browser panel (left, variable width; F2 to toggle)
-    → Chat Sidebar panel (right, 380px default, resizable)
-      → Title bar + status pill
-      → Scrollable message history
-        → User bubbles
-        → Plan cards (with capability steps)
-        → Result cards
-          → Image thumbnail (base64 decode → premul RGBA → draw_pixmap)
-          → Text file (line numbers + file stats, 15 lines)
-          → Directory tree (|-- connectors, sizes, dirs first)
-        → Error cards (click to expand detail modal)
-      → Input field + send button
-    → HITL approval overlay (modal, centered)
-    → Detail modal (click any result/error card)
-    → Toast notifications (top-right, fade out)
+    1. Desktop wallpaper (two-tone dark gradient)
+    2. Floating windows (back to front)
+         → Window chrome: shadow · body · title bar · close button · title text · AI badge
+         → Window content:
+             Terminal → PTY surface
+             Browser  → URL bar + headless screenshot
+             DynamicApp → widget tree (Label/Button/ProgressBar/TextDisplay)
+    3. Agent mode tint (2px accent border around screen when agent_mode=true)
+    4. Menu bar (28px): "Soma" · activity dot + text · [pvt] · clock
+    5. Dock (72px pill): icons · open dots · hover highlight · agent glow
+    6. AI Sidebar overlay (slide animation, positioned at slide_x)
+         → Chat history · plan cards · result cards · "Save as workflow" links
+         → HITL approval modal (overlaid when plan pending)
+    7. Expanded message detail modal
+    8. Toast notifications (top-right, fade out)
   → DRM dumb buffer blit + page flip
      OR softbuffer Surface (winit dev mode)
 ```
@@ -530,6 +678,7 @@ Native OS Project/
 │       ├── intent.rs                   # Three-layer intent pipeline (keyword → LLM → JSON)
 │       ├── executor.rs                 # Capability dispatch
 │       ├── ipc.rs                      # Unix socket server + conversation context
+│       ├── observer.rs                 # DesktopObserver: passive workflow recording, persists to ~/.soma/workflows.json
 │       └── capabilities/
 │           ├── mod.rs                  # Capability trait + registry (loads built-in + user-defined)
 │           ├── filesystem.rs           # 9 actions (read_file supports image base64, ~ expansion)
@@ -537,16 +686,23 @@ Native OS Project/
 │           ├── system.rs               # 6 system info actions
 │           ├── network.rs              # 5 network diagnostic actions
 │           ├── package.rs              # 4 package management actions
+│           ├── browser.rs              # 4 browser actions (navigate, get_content, search, screenshot)
+│           ├── vision.rs               # analyze_image via qwen2.5-vl:7b
 │           ├── meta.rs                 # 3 actions: propose, list_proposed, describe_gap
+│           ├── desktop_agent.rs        # Desktop control: start/end agent mode, spawn_app, desktop_action
 │           └── script.rs              # ScriptCapability: runtime caps from ~/.soma/capabilities/*.json
 │
 ├── soma-compositor/                    # Compositor binary
 │   └── src/
-│       ├── main.rs                     # Backend selection, DRM main loop, winit event loop
+│       ├── main.rs                     # Desktop event loop, AppState, 9-layer redraw, input routing
 │       ├── login.rs                    # Full-screen login screen (reads /etc/soma/passwd)
-│       ├── renderer.rs                 # tiny-skia + cosmic-text renderer
-│       ├── sidebar.rs                  # Chat UI, result cards, image thumbnails, HITL overlay
+│       ├── renderer.rs                 # tiny-skia + cosmic-text renderer + Theme palette
+│       ├── sidebar.rs                  # Chat UI, slide animation, result cards, HITL overlay, workflow annotation
 │       ├── terminal.rs                 # PTY terminal emulator
+│       ├── browser_panel.rs            # Browser panel (URL bar + headless screenshot)
+│       ├── desktop.rs                  # Wallpaper rendering, menu bar rendering
+│       ├── dock.rs                     # Dock struct, DockApp, render_dock, hit testing
+│       ├── window_manager.rs           # FloatingWindow, WindowContent, AppDef, Widget, chrome render
 │       ├── ipc_client.rs               # Agent daemon connection
 │       ├── backend/
 │       │   ├── mod.rs                  # InputEvent types (KeyCode, MouseBtn)
@@ -587,10 +743,11 @@ Native OS Project/
 ### Why a custom compositor instead of GNOME/KDE?
 
 Traditional desktops are designed for mouse-and-keyboard humans. For an AI agent:
-- **The HITL modal is a first-class OS primitive** — rendered by the compositor itself, cannot be bypassed
+- **The HITL modal is a first-class OS primitive** — rendered by the compositor itself, cannot be bypassed by any app or agent action
+- **The desktop is built for agents** — every window, dock state, and menu bar indicator is driven by structured IPC, not pixel-scraping
 - **Minimal footprint** — SomaOS boots in seconds with ~100 MB RAM baseline
-- **The chat sidebar is the primary interface**, not an afterthought
 - **DRM/KMS direct rendering** — no Wayland/X11 server needed, nothing between the agent and the display
+- **Agent mode is native** — the same compositor that renders the desktop also routes `DesktopAction` IPC messages. No accessibility API, no OS hooks — the agent is an equal participant at the compositor layer.
 - **Future browser embedding** — WebKitGTK offscreen renders to an RGBA pixmap that composites into the existing DRM framebuffer; no architectural change needed
 
 ### Why Native Rust apps + embedded browser (not just a browser shell)?

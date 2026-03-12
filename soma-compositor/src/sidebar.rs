@@ -135,6 +135,10 @@ pub struct Sidebar {
     pub tab: SidebarTab,
     /// Settings tab state
     pub settings: SettingsState,
+    /// Current animated x-offset for slide-in/out (f32::MAX = not yet initialised)
+    pub slide_x: f32,
+    /// Target x-offset (screen_w = hidden off-right, screen_w - SIDEBAR_WIDTH = visible)
+    pub slide_target_x: f32,
 }
 
 impl Sidebar {
@@ -152,6 +156,8 @@ impl Sidebar {
             expanded_msg_idx: None,
             tab: SidebarTab::Chat,
             settings: SettingsState::new(),
+            slide_x: f32::MAX,
+            slide_target_x: f32::MAX,
         }
     }
 
@@ -281,13 +287,23 @@ impl Sidebar {
         if self.settings.saved_toast > 0.0 {
             self.settings.saved_toast = (self.settings.saved_toast - dt).max(0.0);
         }
+        // Slide animation — 800px/s tween toward slide_target_x
+        if self.slide_x != f32::MAX && self.slide_target_x != f32::MAX {
+            let diff = self.slide_target_x - self.slide_x;
+            let step = 800.0 * dt;
+            if diff.abs() <= step {
+                self.slide_x = self.slide_target_x;
+            } else {
+                self.slide_x += step * diff.signum();
+            }
+        }
     }
 
     /// Handle a click on the settings tab UI.
     /// Returns an `UpdateConfig` message if the user clicked Save.
     pub fn on_settings_click(&mut self, rel_x: f32, rel_y: f32) -> Option<CompositorMessage> {
-        // Tab bar (y 44..70): Chat tab at x=0..w/2, Settings tab at x=w/2..w
-        if rel_y >= 44.0 && rel_y <= 70.0 {
+        // Tab bar: y=44..71 (44 tab_y + 26 tab_h + 1 separator)
+        if rel_y >= 44.0 && rel_y < 71.0 {
             let half = SIDEBAR_WIDTH / 2.0;
             if rel_x < half {
                 self.tab = SidebarTab::Chat;
@@ -301,32 +317,46 @@ impl Sidebar {
             return None;
         }
 
-        // Provider radio buttons (one per row, starting at y=86)
-        let radio_start_y = 86.0;
+        // Coordinates derived from render_settings_tab():
+        //   content_y = 71 (44 + 26 + 1)
+        //   section label "LLM Provider" at y=81 (content_y+10), height=18 → radios start at y=99
+        //   each radio row: 28px spacing; 5 providers → end at 99+140=239; +8 gap → fields at 247
+        //   draw_field advances: 14 (label) + 44 (field+gap) = 58px per field
+        //   save button: 247 + 3×58 = 421
+
+        let radio_start_y = 99.0;
         let radio_h = 28.0;
         for (i, _) in PROVIDERS.iter().enumerate() {
             let ry = radio_start_y + i as f32 * radio_h;
             if rel_y >= ry && rel_y < ry + radio_h && rel_x >= 14.0 && rel_x <= SIDEBAR_WIDTH - 14.0 {
                 self.settings.provider_idx = i;
-                // Auto-fill default URL for the selected provider
                 let key = PROVIDERS[i].0;
+                // Auto-fill default URL and model for the selected provider
                 self.settings.api_url_input = match key {
                     "anthropic" => "https://api.anthropic.com".to_string(),
                     "openai"    => "https://api.openai.com".to_string(),
                     "gemini"    => "https://generativelanguage.googleapis.com".to_string(),
                     _           => "http://localhost:11434".to_string(),
                 };
+                self.settings.model_input = match key {
+                    "anthropic" => "claude-haiku-4-5-20251001".to_string(),
+                    "openai"    => "gpt-4o-mini".to_string(),
+                    "gemini"    => "gemini-2.0-flash".to_string(),
+                    _           => "llama3.1:8b".to_string(),
+                };
                 return None;
             }
         }
 
-        // Text fields (Model, API Key, API URL) — below provider list
-        let fields_start_y = radio_start_y + PROVIDERS.len() as f32 * radio_h + 16.0;
-        let field_h = 36.0;
-        let field_gap = 44.0;
+        // Text fields start at 247; each field occupies 58px (14 label + 44 field+gap)
+        let fields_start_y = radio_start_y + PROVIDERS.len() as f32 * radio_h + 8.0; // 99+140+8 = 247
+        let field_stride = 58.0;
+        let field_rect_h = 30.0;
         for i in 0..3usize {
-            let fy = fields_start_y + i as f32 * field_gap;
-            if rel_y >= fy && rel_y < fy + field_h && rel_x >= 14.0 {
+            let label_y = fields_start_y + i as f32 * field_stride;
+            let field_y = label_y + 14.0;
+            // Hit the full row (label + input rect)
+            if rel_y >= label_y && rel_y < field_y + field_rect_h && rel_x >= 14.0 {
                 self.settings.active_field = match i {
                     0 => SettingsField::Model,
                     1 => SettingsField::ApiKey,
@@ -337,15 +367,15 @@ impl Sidebar {
             }
         }
 
-        // Save button
-        let save_y = fields_start_y + 3.0 * field_gap + 10.0;
+        // Save button at 247 + 3×58 = 421, height 32
+        let save_y = fields_start_y + 3.0 * field_stride;
         if rel_y >= save_y && rel_y < save_y + 36.0 && rel_x >= 14.0 {
             self.settings.active_field = SettingsField::None;
             self.settings.saved_toast = 2.5;
             return Some(self.build_update_config());
         }
 
-        // Clicking outside fields deselects
+        // Clicking elsewhere deselects text field focus
         self.settings.active_field = SettingsField::None;
         None
     }
@@ -363,6 +393,10 @@ impl Sidebar {
     /// `rel_x/rel_y` are relative to the sidebar's left edge.
     /// Returns true if a message card was toggled (needs redraw).
     pub fn on_sidebar_click(&mut self, _rel_x: f32, rel_y: f32, height: f32) -> bool {
+        // Don't process chat clicks when in the settings tab
+        if self.tab != SidebarTab::Chat {
+            return false;
+        }
         // If detail modal is open, any click dismisses it
         if self.expanded_msg_idx.is_some() {
             self.expanded_msg_idx = None;
@@ -487,41 +521,52 @@ impl Sidebar {
         let w = SIDEBAR_WIDTH;
         let s = &self.settings;
 
-        // Section header: Provider
+        // Section header — VS Code "SETTINGS" style uppercase muted label
         let mut y = content_y + 10.0;
-        renderer.draw_text(pixmap, "LLM Provider", ox + 14.0, y, w - 28.0, 10.0, t.text_muted);
+        renderer.draw_text(pixmap, "LLM PROVIDER", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
         y += 18.0;
 
-        // Provider radio buttons
+        // Provider radio buttons — VS Code list-item style
         for (i, (_, label)) in PROVIDERS.iter().enumerate() {
             let selected = s.provider_idx == i;
-            let row_bg = if selected { [99, 102, 241, 30] } else { [0, 0, 0, 0] };
-            renderer.fill_rounded_rect(pixmap, ox + 14.0, y, w - 28.0, 24.0, 6.0, row_bg);
-            // Radio circle
-            let dot_col = if selected { t.accent } else { t.text_muted };
-            renderer.fill_rounded_rect(pixmap, ox + 22.0, y + 7.0, 10.0, 10.0, 5.0, dot_col);
+            // Active row: left accent bar + subtle bg
             if selected {
-                renderer.fill_rounded_rect(pixmap, ox + 25.0, y + 10.0, 4.0, 4.0, 2.0, [255, 255, 255, 255]);
+                renderer.fill_rect(pixmap, ox, y, 2.0, 24.0, t.accent);
+                renderer.fill_rect(pixmap, ox + 2.0, y, w - 2.0, 24.0, [255, 255, 255, 6]);
+            }
+            // Radio dot
+            let dot_col = if selected { t.accent } else { [80, 80, 80, 255] };
+            renderer.fill_rounded_rect(pixmap, ox + 16.0, y + 7.0, 10.0, 10.0, 5.0, dot_col);
+            if selected {
+                renderer.fill_rounded_rect(pixmap, ox + 19.0, y + 10.0, 4.0, 4.0, 2.0, [255, 255, 255, 255]);
             }
             let text_col = if selected { t.text_primary } else { t.text_secondary };
-            renderer.draw_text(pixmap, label, ox + 38.0, y + 6.0, w - 56.0, 10.0, text_col);
+            renderer.draw_text(pixmap, label, ox + 32.0, y + 6.0, w - 48.0, 10.0, text_col);
             y += 28.0;
         }
 
+        // Separator
         y += 8.0;
+        renderer.fill_rect(pixmap, ox + 14.0, y - 4.0, w - 28.0, 1.0, t.border);
 
-        // Text field helper
+        // Text field helper — VS Code-style labeled input
         let mut draw_field = |label: &str, value: &str, mask: bool, active: bool, fy: &mut f32| {
             renderer.draw_text(pixmap, label, ox + 14.0, *fy, w - 28.0, 9.0, t.text_muted);
             *fy += 14.0;
-            let border_col = if active { t.accent } else { t.border };
-            renderer.fill_rounded_rect(pixmap, ox + 14.0, *fy, w - 28.0, 30.0, 6.0, t.bg_input);
+            let border_col = if active { t.accent } else { [60, 60, 60, 255] };
+            renderer.fill_rect(pixmap, ox + 14.0, *fy, w - 28.0, 30.0, t.bg_input);
             renderer.stroke_rect(pixmap, ox + 14.0, *fy, w - 28.0, 30.0, border_col);
+            // Bottom-only accent line when active (VS Code style)
+            if active {
+                renderer.fill_rect(pixmap, ox + 14.0, *fy + 29.0, w - 28.0, 1.0, t.accent);
+            }
             let display = if mask && !value.is_empty() {
                 let shown = value.chars().count().saturating_sub(4);
                 format!("{}{}", "*".repeat(shown), &value[value.len().saturating_sub(4)..])
             } else if active && self.cursor_visible {
                 format!("{}|", value)
+            } else if value.is_empty() {
+                "(not set)".to_string()
             } else {
                 value.to_string()
             };
@@ -534,85 +579,96 @@ impl Sidebar {
         draw_field("API Key", &s.api_key_input, true, s.active_field == SettingsField::ApiKey, &mut y);
         draw_field("API URL", &s.api_url_input, false, s.active_field == SettingsField::ApiUrl, &mut y);
 
-        // Save button
-        renderer.fill_rounded_rect(pixmap, ox + 14.0, y, w - 28.0, 32.0, 8.0, t.accent);
-        renderer.draw_text(pixmap, "Save Settings", ox + w / 2.0 - 42.0, y + 9.0, 100.0, 11.0, [255, 255, 255, 255]);
-        y += 42.0;
+        // Save button — VS Code primary button style
+        renderer.fill_rect(pixmap, ox + 14.0, y, w - 28.0, 28.0, t.accent);
+        renderer.draw_text(pixmap, "Save Settings", ox + w / 2.0 - 42.0, y + 8.0, 100.0, 10.0, [255, 255, 255, 255]);
+        y += 38.0;
 
-        // "Saved!" toast
+        // Saved confirmation — inline, not a toast
         if s.saved_toast > 0.0 {
-            renderer.fill_rounded_rect(pixmap, ox + 14.0, y, w - 28.0, 28.0, 6.0, t.success);
-            renderer.draw_text(pixmap, "Saved! Agent will use new settings.", ox + 20.0, y + 8.0, w - 40.0, 10.0, [255, 255, 255, 255]);
+            renderer.draw_text(pixmap, "v  Settings applied", ox + 14.0, y, w - 28.0, 9.5, t.success);
         }
 
         // Bottom hint
         let hint_y = height - 20.0;
-        renderer.draw_text(pixmap, "Settings saved to ~/.soma/config.toml", ox + 14.0, hint_y, w - 28.0, 8.0, t.text_muted);
+        renderer.draw_text(pixmap, "~/.soma/config.toml", ox + 14.0, hint_y, w - 28.0, 8.0, t.text_muted);
     }
 
     // ──────────────────────────────────────────────
     //  Rendering
     // ──────────────────────────────────────────────
 
-    pub fn render(&mut self, renderer: &mut Renderer, pixmap: &mut Pixmap, ox: f32, height: f32) {
+    pub fn render(&mut self, renderer: &mut Renderer, pixmap: &mut Pixmap, ox: f32, top_y: f32, height: f32) {
         let t = renderer.theme.clone();
         let w = SIDEBAR_WIDTH;
 
-        // Background
-        renderer.fill_rect(pixmap, ox, 0.0, w, height, t.bg_sidebar);
-        renderer.fill_rect(pixmap, ox, 0.0, 1.0, height, t.border);
+        // Background — VS Code activity bar style
+        renderer.fill_rect(pixmap, ox, top_y, w, height, t.bg_sidebar);
+        renderer.fill_rect(pixmap, ox, top_y, 1.0, height, t.border);
 
-        // ─── Title Bar ───
-        renderer.fill_rect(pixmap, ox, 0.0, w, 44.0, [255, 255, 255, 5]);
-        renderer.fill_rect(pixmap, ox, 43.0, w, 1.0, t.border);
-        renderer.draw_text(pixmap, "* SOMA", ox + 14.0, 14.0, 100.0, 13.0, t.accent);
+        // ─── Title Bar — VS Code panel header style ───
+        // Slightly darker header strip
+        renderer.fill_rect(pixmap, ox, top_y, w, 44.0, [0, 0, 0, 30]);
+        renderer.fill_rect(pixmap, ox, top_y + 43.0, w, 1.0, t.border);
 
-        // Status pill
+        // Agent name
+        renderer.draw_text(pixmap, "Soma", ox + 14.0, top_y + 15.0, 80.0, 11.0, t.text_secondary);
+
+        // Status dot + label — right-aligned, VS Code status bar style
         let status_color = match self.status {
             AgentStatus::Idle => t.success,
             AgentStatus::Thinking => t.accent,
             AgentStatus::AwaitingApproval => t.warning,
-            AgentStatus::Executing => [249, 115, 22, 255],
+            AgentStatus::Executing => [230, 140, 50, 255],
             AgentStatus::Completed => t.success,
             AgentStatus::Error => t.error,
         };
         let status_text = format!("{}", self.status);
-        renderer.fill_rounded_rect(pixmap, ox + w - 100.0, 12.0, 88.0, 20.0, 10.0, [255, 255, 255, 8]);
-        renderer.fill_rounded_rect(pixmap, ox + w - 96.0, 16.0, 6.0, 6.0, 3.0, status_color);
-        renderer.draw_text(pixmap, &status_text, ox + w - 86.0, 15.0, 72.0, 10.0, status_color);
+        // Dot indicator
+        renderer.fill_rounded_rect(pixmap, ox + w - 100.0, top_y + 19.0, 6.0, 6.0, 3.0, status_color);
+        renderer.draw_text(pixmap, &status_text, ox + w - 90.0, top_y + 16.0, 78.0, 10.0, status_color);
 
-        // ─── Tab Bar ───
-        let tab_y = 44.0;
+        // ─── Tab Bar — VS Code editor tab style ───
+        let tab_y = top_y + 44.0;
         let tab_h = 26.0;
         let half = w / 2.0;
-        renderer.fill_rect(pixmap, ox, tab_y, w, tab_h, [255, 255, 255, 3]);
-        // Chat tab
-        let chat_bg = if self.tab == SidebarTab::Chat { t.accent } else { [0, 0, 0, 0] };
-        let chat_col = if self.tab == SidebarTab::Chat { [255, 255, 255, 255] } else { t.text_muted };
-        renderer.fill_rounded_rect(pixmap, ox + 4.0, tab_y + 3.0, half - 8.0, tab_h - 6.0, 6.0, chat_bg);
-        renderer.draw_text(pixmap, "Chat", ox + half / 2.0 - 14.0, tab_y + 7.0, 60.0, 10.0, chat_col);
+        renderer.fill_rect(pixmap, ox, tab_y, w, tab_h, [0, 0, 0, 20]);
+
+        // Chat tab: active = solid bg with top border; inactive = transparent text
+        if self.tab == SidebarTab::Chat {
+            renderer.fill_rect(pixmap, ox, tab_y, half, tab_h, t.bg_sidebar);
+            renderer.fill_rect(pixmap, ox, tab_y, half, 1.0, t.accent); // top accent line
+            renderer.draw_text(pixmap, "Chat", ox + half / 2.0 - 14.0, tab_y + 8.0, 60.0, 10.0, t.text_primary);
+        } else {
+            renderer.draw_text(pixmap, "Chat", ox + half / 2.0 - 14.0, tab_y + 8.0, 60.0, 10.0, t.text_muted);
+        }
+        // Separator between tabs
+        renderer.fill_rect(pixmap, ox + half, tab_y + 6.0, 1.0, tab_h - 12.0, t.border);
         // Settings tab
-        let set_bg  = if self.tab == SidebarTab::Settings { t.accent } else { [0, 0, 0, 0] };
-        let set_col = if self.tab == SidebarTab::Settings { [255, 255, 255, 255] } else { t.text_muted };
-        renderer.fill_rounded_rect(pixmap, ox + half + 4.0, tab_y + 3.0, half - 8.0, tab_h - 6.0, 6.0, set_bg);
-        renderer.draw_text(pixmap, "Settings", ox + half + half / 2.0 - 22.0, tab_y + 7.0, 80.0, 10.0, set_col);
+        if self.tab == SidebarTab::Settings {
+            renderer.fill_rect(pixmap, ox + half, tab_y, half, tab_h, t.bg_sidebar);
+            renderer.fill_rect(pixmap, ox + half, tab_y, half, 1.0, t.accent); // top accent line
+            renderer.draw_text(pixmap, "Settings", ox + half + half / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_primary);
+        } else {
+            renderer.draw_text(pixmap, "Settings", ox + half + half / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_muted);
+        }
         renderer.fill_rect(pixmap, ox, tab_y + tab_h, w, 1.0, t.border);
 
         // ─── Content Area (routed by tab) ───
-        let content_y = 44.0 + tab_h + 1.0; // below tab bar
+        let content_y = top_y + 44.0 + tab_h + 1.0; // below tab bar
 
         if self.tab == SidebarTab::Settings {
-            self.render_settings_tab(renderer, pixmap, ox, content_y, height, &t);
+            self.render_settings_tab(renderer, pixmap, ox, content_y, top_y + height, &t);
             return;
         }
 
-        let content_h = height - content_y - 68.0;
+        let content_h = (top_y + height) - content_y - 68.0;
 
         if self.messages.is_empty() {
-            let cy = content_y + content_h / 2.0 - 50.0;
-            renderer.draw_text(pixmap, "Welcome to Soma", ox + w / 2.0 - 70.0, cy, 200.0, 15.0, t.text_primary);
-            renderer.draw_text(pixmap, "Describe what you want to do.", ox + 30.0, cy + 28.0, w - 60.0, 11.0, t.text_muted);
-            renderer.draw_text(pixmap, "I'll plan, you approve, I execute.", ox + 30.0, cy + 46.0, w - 60.0, 11.0, t.text_muted);
+            let cy = content_y + content_h / 2.0 - 40.0;
+            renderer.draw_text(pixmap, "Soma Agent", ox + 14.0, cy, w - 28.0, 12.0, t.text_secondary);
+            renderer.draw_text(pixmap, "Describe a task. I'll plan it,", ox + 14.0, cy + 22.0, w - 28.0, 10.0, t.text_muted);
+            renderer.draw_text(pixmap, "you approve, then I execute it.", ox + 14.0, cy + 36.0, w - 28.0, 10.0, t.text_muted);
         } else {
             // Calculate total content height
             let mut total_h = 0.0_f32;
@@ -645,72 +701,80 @@ impl Sidebar {
             }
         }
 
-        // ─── Input Area ───
-        let input_y = height - 64.0;
+        // ─── Input Area — VS Code chat input style ───
+        let input_y = top_y + height - 68.0;
         renderer.fill_rect(pixmap, ox, input_y - 1.0, w, 1.0, t.border);
-        renderer.fill_rect(pixmap, ox, input_y, w, 64.0, [255, 255, 255, 5]);
+        renderer.fill_rect(pixmap, ox, input_y, w, 68.0, [0, 0, 0, 15]);
 
-        renderer.fill_rounded_rect(pixmap, ox + 10.0, input_y + 10.0, w - 58.0, 36.0, 10.0, t.bg_input);
-        renderer.stroke_rect(pixmap, ox + 10.0, input_y + 10.0, w - 58.0, 36.0, t.border);
+        // Input box — flat with 1px border (VS Code style, not rounded pill)
+        let input_border = if self.status == AgentStatus::AwaitingApproval { t.warning } else { [60, 60, 60, 255] };
+        renderer.fill_rect(pixmap, ox + 10.0, input_y + 10.0, w - 52.0, 38.0, t.bg_input);
+        renderer.stroke_rect(pixmap, ox + 10.0, input_y + 10.0, w - 52.0, 38.0, input_border);
 
+        let placeholder = match self.status {
+            AgentStatus::AwaitingApproval => "Enter to approve, Esc to reject",
+            _ => "Ask anything...",
+        };
         let display = if self.input_text.is_empty() {
-            match self.status {
-                AgentStatus::AwaitingApproval => "Enter=approve  Esc=reject".to_string(),
-                _ => "Ask me anything...".to_string(),
-            }
+            placeholder.to_string()
         } else if self.cursor_visible {
             format!("{}|", self.input_text)
         } else {
             self.input_text.clone()
         };
         let text_color = if self.input_text.is_empty() { t.text_muted } else { t.text_primary };
-        renderer.draw_text(pixmap, &display, ox + 18.0, input_y + 20.0, w - 76.0, 11.0, text_color);
+        renderer.draw_text(pixmap, &display, ox + 16.0, input_y + 22.0, w - 68.0, 10.0, text_color);
 
-        // Send button
+        // Send button — VS Code primary action style (flat rectangle)
         let btn_color = if self.status == AgentStatus::AwaitingApproval { t.success } else { t.accent };
-        renderer.fill_rounded_rect(pixmap, ox + w - 42.0, input_y + 12.0, 32.0, 32.0, 8.0, btn_color);
+        renderer.fill_rect(pixmap, ox + w - 38.0, input_y + 10.0, 28.0, 38.0, btn_color);
         let btn_icon = if self.status == AgentStatus::AwaitingApproval { "OK" } else { ">" };
-        renderer.draw_text(pixmap, btn_icon, ox + w - 36.0, input_y + 20.0, 22.0, 12.0, [255, 255, 255, 255]);
+        renderer.draw_text(pixmap, btn_icon, ox + w - 32.0, input_y + 22.0, 20.0, 11.0, [255, 255, 255, 255]);
     }
 
     fn render_message(&self, renderer: &mut Renderer, pixmap: &mut Pixmap, msg: &ChatMessage, y: f32, ox: f32, w: f32, t: &crate::renderer::Theme) {
         match msg {
             ChatMessage::UserInput { text } => {
-                // Right-aligned user bubble
-                let max_w = (w - 40.0).min(280.0);
+                // User message: right-aligned, VS Code chat user bubble
+                let max_w = (w - 32.0).min(300.0);
                 let text_display = truncate_str(text, 60);
-                let bubble_w = max_w;
-                let x = ox + w - bubble_w - 10.0;
-                renderer.fill_rounded_rect(pixmap, x, y, bubble_w, 30.0, 12.0, t.accent);
-                renderer.draw_text(pixmap, &text_display, x + 10.0, y + 8.0, bubble_w - 20.0, 11.0, [255, 255, 255, 255]);
+                let x = ox + w - max_w - 10.0;
+                renderer.fill_rect(pixmap, x, y, max_w, 28.0, [0, 122, 204, 28]);
+                renderer.fill_rect(pixmap, x, y, 2.0, 28.0, t.accent); // left accent bar
+                renderer.draw_text(pixmap, &text_display, x + 10.0, y + 8.0, max_w - 14.0, 10.0, t.text_primary);
             }
 
             ChatMessage::Thinking => {
-                renderer.fill_rounded_rect(pixmap, ox + 10.0, y, 150.0, 26.0, 8.0, t.bg_surface);
-                renderer.draw_text(pixmap, "...  Thinking", ox + 20.0, y + 6.0, 130.0, 11.0, t.accent);
+                // Agent thinking — inline, no box, just muted italic-style text
+                renderer.draw_text(pixmap, "Thinking...", ox + 14.0, y + 6.0, 160.0, 10.0, t.text_muted);
             }
 
             ChatMessage::PlanProposal { plan, .. } => {
                 let card_w = w - 20.0;
-                let step_h = plan.steps.len() as f32 * 22.0;
-                let card_h = 36.0 + step_h.max(22.0);
+                let step_h = plan.steps.len() as f32 * 18.0;
+                let card_h = 32.0 + step_h.max(18.0) + 18.0; // +18 for workflow link
 
-                renderer.fill_rounded_rect(pixmap, ox + 10.0, y, card_w, card_h, 8.0, t.bg_surface);
+                // Card: subtle bg + left border in risk color
+                let risk_color = match plan.risk_level {
+                    RiskLevel::Low => t.success, RiskLevel::Medium => t.warning, RiskLevel::High => t.error
+                };
+                renderer.fill_rect(pixmap, ox + 10.0, y, card_w, card_h, t.bg_surface);
+                renderer.fill_rect(pixmap, ox + 10.0, y, 2.0, card_h, risk_color);
 
-                // Intent + risk
+                // Intent label
                 let intent = if plan.description.is_empty() { &plan.intent } else { &plan.description };
-                let risk_color = match plan.risk_level { RiskLevel::Low => t.success, RiskLevel::Medium => t.warning, RiskLevel::High => t.error };
-
-                renderer.fill_rounded_rect(pixmap, ox + 16.0, y + 8.0, 6.0, 6.0, 3.0, risk_color);
-                renderer.draw_text(pixmap, &truncate_str(intent, 45), ox + 28.0, y + 5.0, card_w - 40.0, 11.0, t.text_primary);
+                renderer.draw_text(pixmap, &truncate_str(intent, 48), ox + 18.0, y + 7.0, card_w - 28.0, 10.0, t.text_primary);
 
                 // Steps list
-                let mut sy = y + 26.0;
+                let mut sy = y + 24.0;
                 for (i, step) in plan.steps.iter().enumerate() {
-                    let label = format!("{}. {}.{}", i + 1, step.capability, step.action);
-                    renderer.draw_text(pixmap, &label, ox + 22.0, sy, card_w - 36.0, 9.0, [196, 181, 253, 220]);
-                    sy += 22.0;
+                    let label = format!("  {}  {}.{}", i + 1, step.capability, step.action);
+                    renderer.draw_text(pixmap, &label, ox + 18.0, sy, card_w - 28.0, 9.0, t.text_secondary);
+                    sy += 18.0;
                 }
+
+                // "Save as workflow" link
+                renderer.draw_text(pixmap, "[^ Save as workflow]", ox + 18.0, sy + 2.0, card_w - 28.0, 8.0, t.accent);
             }
 
             ChatMessage::ExecutionDone { intent, success_count, total, results, preview } => {
@@ -723,27 +787,27 @@ impl Sidebar {
                     PreviewData::None => (0.0, 0.0),
                 };
 
-                let header_h = 28.0;
+                let header_h = 26.0;
                 let thumb_section_h = if thumb_h > 0.0 { thumb_h + 10.0 } else { 0.0 };
-                let lines_h = visible_lines.len() as f32 * 15.0;
-                let more_h = if more_count > 0 { 15.0 } else { 0.0 };
+                let lines_h = visible_lines.len() as f32 * 14.0;
+                let more_h = if more_count > 0 { 14.0 } else { 0.0 };
                 let card_h = header_h + thumb_section_h + lines_h + more_h + 8.0;
                 let card_w = w - 20.0;
 
-                // Card background
-                let bg = if *success_count == *total { [74, 222, 128, 12] } else { [248, 113, 113, 12] };
-                renderer.fill_rounded_rect(pixmap, ox + 10.0, y, card_w, card_h, 8.0, bg);
+                // Card: left border in success/warning color (VS Code diff-style)
+                let line_color = if *success_count == *total { t.success } else { t.warning };
+                renderer.fill_rect(pixmap, ox + 10.0, y, card_w, card_h, t.bg_surface);
+                renderer.fill_rect(pixmap, ox + 10.0, y, 2.0, card_h, line_color);
 
                 // Header
                 let icon = if *success_count == *total { "v" } else { "!" };
-                let header_color = if *success_count == *total { t.success } else { t.warning };
-                let header = format!("{} {} ({}/{})", icon, truncate_str(intent, 30), success_count, total);
-                renderer.draw_text(pixmap, &header, ox + 18.0, y + 6.0, card_w - 24.0, 10.0, header_color);
+                let header = format!("{} {} ({}/{})", icon, truncate_str(intent, 32), success_count, total);
+                renderer.draw_text(pixmap, &header, ox + 18.0, y + 7.0, card_w - 24.0, 10.0, line_color);
 
-                // Divider
-                renderer.fill_rect(pixmap, ox + 18.0, y + 24.0, card_w - 24.0, 1.0, [255, 255, 255, 12]);
+                // Separator
+                renderer.fill_rect(pixmap, ox + 18.0, y + 23.0, card_w - 24.0, 1.0, t.border);
 
-                let mut ry = y + header_h + 2.0;
+                let mut ry = y + header_h;
 
                 // Image thumbnail
                 if let PreviewData::Image { pixels, width, height } = preview {
@@ -777,14 +841,20 @@ impl Sidebar {
                 }
                 if more_count > 0 {
                     renderer.draw_text(pixmap, &format!("  ... {} more lines", more_count), ox + 18.0, ry, card_w - 28.0, 9.0, t.text_muted);
+                    ry += 14.0;
                 }
+
+                // "Save as workflow" link
+                renderer.draw_text(pixmap, "[^ Save as workflow]", ox + 18.0, ry + 2.0, card_w - 28.0, 8.0, t.accent);
             }
 
             ChatMessage::AgentError { message } => {
+                // Error card: red left border (VS Code problem panel style)
                 let card_w = w - 20.0;
-                renderer.fill_rounded_rect(pixmap, ox + 10.0, y, card_w, 38.0, 8.0, [248, 113, 113, 15]);
-                renderer.draw_text(pixmap, "! Error", ox + 18.0, y + 4.0, 80.0, 10.0, t.error);
-                renderer.draw_text(pixmap, &truncate_str(message, 55), ox + 18.0, y + 20.0, card_w - 28.0, 9.0, t.error);
+                renderer.fill_rect(pixmap, ox + 10.0, y, card_w, 36.0, t.bg_surface);
+                renderer.fill_rect(pixmap, ox + 10.0, y, 2.0, 36.0, t.error);
+                renderer.draw_text(pixmap, "Error", ox + 18.0, y + 5.0, 60.0, 9.0, t.error);
+                renderer.draw_text(pixmap, &truncate_str(message, 55), ox + 18.0, y + 19.0, card_w - 28.0, 9.0, t.text_secondary);
             }
         }
     }
@@ -797,16 +867,16 @@ impl Sidebar {
         let t = renderer.theme.clone();
 
         // Backdrop
-        renderer.fill_rect(pixmap, 0.0, 0.0, width, height, [0, 0, 0, 150]);
+        renderer.fill_rect(pixmap, 0.0, 0.0, width, height, [0, 0, 0, 160]);
 
-        // Modal size
+        // Modal — VS Code quick input / confirmation dialog style
         let step_count = plan.steps.len().max(1);
-        let mh = (160.0 + step_count as f32 * 46.0).min(height - 60.0);
-        let mw = 360.0_f32.min(width - 40.0);
+        let mh = (160.0 + step_count as f32 * 40.0).min(height - 60.0);
+        let mw = 380.0_f32.min(width - 40.0);
         let mx = (width - mw) / 2.0;
         let my = (height - mh) / 2.0;
 
-        renderer.fill_rounded_rect(pixmap, mx, my, mw, mh, 14.0, [22, 22, 42, 250]);
+        renderer.fill_rect(pixmap, mx, my, mw, mh, [37, 37, 38, 252]);
         renderer.stroke_rect(pixmap, mx, my, mw, mh, t.border);
 
         renderer.draw_text(pixmap, "Approve Action?", mx + 18.0, my + 14.0, mw - 36.0, 13.0, t.text_primary);
@@ -871,7 +941,7 @@ fn message_height(msg: &ChatMessage) -> f32 {
         ChatMessage::UserInput { .. } => 38.0,
         ChatMessage::Thinking => 34.0,
         ChatMessage::PlanProposal { plan, .. } => {
-            36.0 + (plan.steps.len() as f32 * 22.0).max(22.0) + 8.0
+            36.0 + (plan.steps.len() as f32 * 22.0).max(22.0) + 8.0 + 18.0 // +18 workflow link
         }
         ChatMessage::ExecutionDone { results, preview, .. } => {
             let lines = format_all_results(results);
@@ -881,7 +951,7 @@ fn message_height(msg: &ChatMessage) -> f32 {
                 PreviewData::Image { height, .. } => *height as f32 + 10.0,
                 PreviewData::None => 0.0,
             };
-            28.0 + thumb_h + (visible as f32 * 15.0) + more_h + 16.0
+            28.0 + thumb_h + (visible as f32 * 15.0) + more_h + 16.0 + 18.0 // +18 workflow link
         }
         ChatMessage::AgentError { .. } => 46.0,
     }

@@ -1,11 +1,14 @@
 mod backend;
 mod browser_panel;
+mod desktop;
+mod dock;
 mod input;
 mod ipc_client;
 mod login;
 mod renderer;
 mod sidebar;
 mod terminal;
+mod window_manager;
 
 use browser_panel::BrowserPanel;
 use log::info;
@@ -239,7 +242,7 @@ impl SomaApp {
             None => return,
         };
 
-        pixmap.fill(tiny_skia::Color::from_rgba8(10, 10, 20, 255));
+        pixmap.fill(tiny_skia::Color::from_rgba8(30, 30, 30, 255));
 
         let w = width as f32;
         let h = height as f32;
@@ -292,7 +295,7 @@ impl SomaApp {
 
         // Render sidebar on the RIGHT
         self.sidebar
-            .render(&mut self.renderer, &mut pixmap, sidebar_x, h);
+            .render(&mut self.renderer, &mut pixmap, sidebar_x, 0.0, h);
 
         // Divider handle
         let divider_color = if self.dragging_divider {
@@ -449,7 +452,8 @@ impl ApplicationHandler for SomaApp {
                 }
                 // Clamp sidebar width on resize
                 let w = width as f32;
-                self.sidebar_width = self.sidebar_width.clamp(MIN_SIDEBAR_W, (w - 200.0).min(MAX_SIDEBAR_W));
+                let max_sidebar_w = (w - 200.0).min(MAX_SIDEBAR_W).max(MIN_SIDEBAR_W);
+                self.sidebar_width = self.sidebar_width.clamp(MIN_SIDEBAR_W, max_sidebar_w);
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -579,7 +583,8 @@ impl ApplicationHandler for SomaApp {
                 if self.dragging_divider {
                     if let Some(win) = &self.window {
                         let total_w = win.inner_size().width as f32;
-                        let new_sidebar_w = (total_w - self.mouse_x).clamp(MIN_SIDEBAR_W, MAX_SIDEBAR_W.min(total_w - 200.0));
+                        let max_sidebar_w = MAX_SIDEBAR_W.min(total_w - 200.0).max(MIN_SIDEBAR_W);
+                        let new_sidebar_w = (total_w - self.mouse_x).clamp(MIN_SIDEBAR_W, max_sidebar_w);
                         self.sidebar_width = new_sidebar_w;
                         win.request_redraw();
                     }
@@ -901,7 +906,7 @@ fn drm_main(runtime: tokio::runtime::Handle) {
             Some(p) => p,
             None => continue,
         };
-        pixmap.fill(tiny_skia::Color::from_rgba8(10, 10, 20, 255));
+        pixmap.fill(tiny_skia::Color::from_rgba8(30, 30, 30, 255));
 
         sidebar.update(dt);
         terminal.update(dt);
@@ -927,7 +932,7 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                     }
                 }
             }
-            sidebar.render(&mut renderer, &mut pixmap, div, hf);
+            sidebar.render(&mut renderer, &mut pixmap, div, 0.0, hf);
 
             // Divider
             renderer.fill_rect(&mut pixmap, div - 1.0, 0.0, 2.0, hf, [255, 255, 255, 15]);
