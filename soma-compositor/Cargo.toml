@@ -35,6 +35,7 @@ libc = "0.2"
 # Image previews
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 base64 = "0.22"
+toml = "0.8"
 
 # Windowing — dev mode (macOS / X11 / Wayland)
 winit = { version = "0.30", features = ["wayland", "x11"], optional = true }

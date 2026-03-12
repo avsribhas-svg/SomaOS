@@ -1,7 +1,9 @@
 mod capabilities;
+mod config;
 mod executor;
 mod intent;
 mod ipc;
+mod providers;
 
 use log::info;
 

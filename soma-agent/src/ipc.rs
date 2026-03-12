@@ -7,8 +7,9 @@ use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 
 use crate::capabilities::CapabilityRegistry;
+use crate::config::SomaConfig;
 use crate::executor::Executor;
-use crate::intent::{self, IntentParser};
+use crate::intent::IntentParser;
 
 /// Pending plans awaiting user approval
 type PendingPlans = Arc<Mutex<HashMap<String, TaskPlan>>>;
@@ -24,8 +25,10 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
     info!("Agent daemon listening on {}", AGENT_SOCKET_PATH);
 
     let registry = Arc::new(CapabilityRegistry::new());
-    let system_prompt = Arc::new(intent::build_system_prompt(&registry));
-    let parser = Arc::new(IntentParser::new());
+    let config = SomaConfig::load();
+    info!("Loaded config: provider={} model={}", config.model.provider, config.model.model);
+
+    let parser = Arc::new(Mutex::new(IntentParser::new(&config)));
     let executor = Arc::new(Executor::new());
     let pending: PendingPlans = Arc::new(Mutex::new(HashMap::new()));
 
@@ -44,7 +47,6 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
         info!("New client connection");
 
         let registry = Arc::clone(&registry);
-        let system_prompt = Arc::clone(&system_prompt);
         let parser = Arc::clone(&parser);
         let executor = Arc::clone(&executor);
         let pending = Arc::clone(&pending);
@@ -55,7 +57,7 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
             let writer = Arc::new(Mutex::new(writer));
             let mut line = String::new();
 
-            // Per-client conversation context
+            // Per-client conversation context (pairs of user/agent strings)
             let mut context: Vec<(String, String)> = Vec::new();
 
             loop {
@@ -78,7 +80,6 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
                                     &parser,
                                     &executor,
                                     &registry,
-                                    &system_prompt,
                                     &pending,
                                     &writer,
                                     &mut context,
@@ -100,24 +101,11 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// Format conversation context for the LLM prompt
-fn format_context(context: &[(String, String)]) -> Option<String> {
-    if context.is_empty() {
-        return None;
-    }
-    let lines: Vec<String> = context
-        .iter()
-        .map(|(user, summary)| format!("User: {}\nAgent: {}", user, summary))
-        .collect();
-    Some(lines.join("\n\n"))
-}
-
 async fn handle_message(
     msg: CompositorMessage,
-    parser: &IntentParser,
+    parser: &Arc<Mutex<IntentParser>>,
     executor: &Executor,
     registry: &CapabilityRegistry,
-    system_prompt: &str,
     pending: &PendingPlans,
     writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     context: &mut Vec<(String, String)>,
@@ -127,13 +115,8 @@ async fn handle_message(
             let id = uuid::Uuid::new_v4().to_string();
             info!("Parsing NL input [{}]: {}", id, text);
 
-            let ctx = format_context(context);
-            match parser
-                .parse(&text, system_prompt, ctx.as_deref())
-                .await
-            {
+            match parser.lock().await.parse(&text, "", None, context, registry).await {
                 Ok(plan) => {
-                    // Add to context
                     let summary = format!(
                         "Planned: {} ({} steps)",
                         plan.intent,
@@ -143,7 +126,6 @@ async fn handle_message(
                     if context.len() > MAX_CONTEXT_ENTRIES {
                         context.remove(0);
                     }
-
                     pending.lock().await.insert(id.clone(), plan.clone());
                     AgentMessage::TaskPlanReady { id, plan }
                 }
@@ -156,11 +138,7 @@ async fn handle_message(
 
         CompositorMessage::ParseIntent { id, input } => {
             info!("Parsing intent [{}]: {}", id, input);
-            let ctx = format_context(context);
-            match parser
-                .parse(&input, system_prompt, ctx.as_deref())
-                .await
-            {
+            match parser.lock().await.parse(&input, "", None, context, registry).await {
                 Ok(plan) => {
                     let summary = format!(
                         "Planned: {} ({} steps)",
@@ -171,7 +149,6 @@ async fn handle_message(
                     if context.len() > MAX_CONTEXT_ENTRIES {
                         context.remove(0);
                     }
-
                     pending.lock().await.insert(id.clone(), plan.clone());
                     AgentMessage::TaskPlanReady { id, plan }
                 }
@@ -205,21 +182,15 @@ async fn handle_message(
                     send_message(&step_msg, writer).await;
 
                     // If a browser action produced a screenshot, push a BrowserUpdate
-                    // so the compositor can refresh the browser panel immediately.
                     if step.capability == "browser" && result.success {
                         if result.data.get("screenshot_base64").is_some() {
                             let browser_msg = AgentMessage::BrowserUpdate {
                                 url: result.data["url"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_string(),
+                                    .as_str().unwrap_or("").to_string(),
                                 title: result.data["title"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_string(),
+                                    .as_str().unwrap_or("").to_string(),
                                 screenshot_base64: result.data["screenshot_base64"]
-                                    .as_str()
-                                    .map(|s| s.to_string()),
+                                    .as_str().map(|s| s.to_string()),
                             };
                             send_message(&browser_msg, writer).await;
                         }
@@ -228,14 +199,11 @@ async fn handle_message(
                     results.push(result);
                 }
 
-                // Update context with execution results
                 let ok = results.iter().filter(|r| r.success).count();
                 if let Some(last) = context.last_mut() {
                     last.1 = format!(
                         "Executed: {} ({}/{} steps succeeded)",
-                        plan.intent,
-                        ok,
-                        results.len()
+                        plan.intent, ok, results.len()
                     );
                 }
 
@@ -251,7 +219,7 @@ async fn handle_message(
         CompositorMessage::Reject { id } => {
             pending.lock().await.remove(&id);
             info!("Plan rejected: {}", id);
-            return; // No response needed
+            return;
         }
 
         CompositorMessage::DirectExec { id, command } => {
@@ -263,6 +231,29 @@ async fn handle_message(
         CompositorMessage::ListCapabilities => {
             let capabilities = registry.list();
             AgentMessage::Capabilities { capabilities }
+        }
+
+        CompositorMessage::UpdateConfig { provider, model, api_key, api_url } => {
+            let id = uuid::Uuid::new_v4().to_string();
+            let mut config = SomaConfig::load();
+            config.model.provider = provider.clone();
+            config.model.model    = model.clone();
+            config.model.api_key  = api_key;
+            config.model.api_url  = api_url;
+
+            // Convert save error to String before any await to keep future Send
+            let save_result = config.save().map_err(|e| e.to_string());
+            match save_result {
+                Ok(_) => {
+                    parser.lock().await.set_provider(&config);
+                    info!("Config updated: provider={} model={}", provider, model);
+                    AgentMessage::ConfigUpdated { provider, model }
+                }
+                Err(e) => {
+                    error!("Failed to save config: {}", e);
+                    AgentMessage::Error { id, message: format!("Failed to save config: {}", e) }
+                }
+            }
         }
 
         CompositorMessage::Ping => AgentMessage::Pong,

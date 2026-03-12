@@ -17,6 +17,9 @@ buildroot/overlay/usr/bin/soma-compositor
 # Legacy Tauri app (replaced by soma-compositor)
 /soma/
 
+# Claude Code
+.claude/
+
 # IDE
 .idea/
 .vscode/

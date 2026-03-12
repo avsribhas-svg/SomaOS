@@ -3,6 +3,82 @@ use soma_common::{AgentMessage, AgentStatus, CapabilityResult, CompositorMessage
 use crate::renderer::Renderer;
 use tiny_skia::Pixmap;
 
+// ──────────────────────────────────────────────
+//  Settings state
+// ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarTab {
+    Chat,
+    Settings,
+}
+
+/// Which text field in the settings tab is focused for keyboard input
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsField {
+    None,
+    Model,
+    ApiKey,
+    ApiUrl,
+}
+
+const PROVIDERS: &[(&str, &str)] = &[
+    ("ollama",    "Ollama (local)"),
+    ("anthropic", "Anthropic (Claude)"),
+    ("openai",    "OpenAI"),
+    ("gemini",    "Gemini"),
+    ("custom",    "Custom (OpenAI-compat)"),
+];
+
+pub struct SettingsState {
+    pub provider_idx: usize,
+    pub model_input: String,
+    pub api_key_input: String,
+    pub api_url_input: String,
+    pub active_field: SettingsField,
+    pub saved_toast: f32, // countdown timer for "Saved!" toast
+}
+
+impl SettingsState {
+    fn new() -> Self {
+        // Load current values from ~/.soma/config.toml
+        let (provider, model, api_key, api_url) = load_config_values();
+        let provider_idx = PROVIDERS.iter().position(|(k, _)| *k == provider.as_str()).unwrap_or(0);
+        Self {
+            provider_idx,
+            model_input: model,
+            api_key_input: api_key,
+            api_url_input: api_url,
+            active_field: SettingsField::None,
+            saved_toast: 0.0,
+        }
+    }
+}
+
+/// Read current config values from disk (compositor doesn't import soma-agent crate,
+/// so we parse the TOML directly).
+fn load_config_values() -> (String, String, String, String) {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let path = std::path::PathBuf::from(home).join(".soma").join("config.toml");
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        if let Ok(val) = content.parse::<toml::Value>() {
+            let m = val.get("model");
+            let get = |key: &str| -> String {
+                m.and_then(|t| t.get(key)).and_then(|v| v.as_str()).unwrap_or("").to_string()
+            };
+            let provider = get("provider");
+            let provider = if provider.is_empty() { "ollama".to_string() } else { provider };
+            let model    = get("model");
+            let model    = if model.is_empty() { "qwen2.5-coder:7b".to_string() } else { model };
+            let api_key  = get("api_key");
+            let api_url  = get("api_url");
+            let api_url  = if api_url.is_empty() { "http://localhost:11434".to_string() } else { api_url };
+            return (provider, model, api_key, api_url);
+        }
+    }
+    ("ollama".to_string(), "qwen2.5-coder:7b".to_string(), String::new(), "http://localhost:11434".to_string())
+}
+
 /// Sidebar panel width in pixels
 pub const SIDEBAR_WIDTH: f32 = 380.0;
 
@@ -55,6 +131,10 @@ pub struct Sidebar {
     cursor_timer: f32,
     /// Index of the message whose detail modal is open (None = closed)
     pub expanded_msg_idx: Option<usize>,
+    /// Active tab (Chat or Settings)
+    pub tab: SidebarTab,
+    /// Settings tab state
+    pub settings: SettingsState,
 }
 
 impl Sidebar {
@@ -70,16 +150,36 @@ impl Sidebar {
             cursor_visible: true,
             cursor_timer: 0.0,
             expanded_msg_idx: None,
+            tab: SidebarTab::Chat,
+            settings: SettingsState::new(),
         }
     }
 
     pub fn on_char(&mut self, c: char) {
+        if self.tab == SidebarTab::Settings {
+            match self.settings.active_field {
+                SettingsField::Model  => self.settings.model_input.push(c),
+                SettingsField::ApiKey => self.settings.api_key_input.push(c),
+                SettingsField::ApiUrl => self.settings.api_url_input.push(c),
+                SettingsField::None   => {}
+            }
+            return;
+        }
         if matches!(self.status, AgentStatus::Idle | AgentStatus::Completed | AgentStatus::Error) {
             self.input_text.push(c);
         }
     }
 
     pub fn on_backspace(&mut self) {
+        if self.tab == SidebarTab::Settings {
+            match self.settings.active_field {
+                SettingsField::Model  => { self.settings.model_input.pop(); }
+                SettingsField::ApiKey => { self.settings.api_key_input.pop(); }
+                SettingsField::ApiUrl => { self.settings.api_url_input.pop(); }
+                SettingsField::None   => {}
+            }
+            return;
+        }
         self.input_text.pop();
     }
 
@@ -177,6 +277,85 @@ impl Sidebar {
         if self.cursor_timer > 0.53 {
             self.cursor_timer = 0.0;
             self.cursor_visible = !self.cursor_visible;
+        }
+        if self.settings.saved_toast > 0.0 {
+            self.settings.saved_toast = (self.settings.saved_toast - dt).max(0.0);
+        }
+    }
+
+    /// Handle a click on the settings tab UI.
+    /// Returns an `UpdateConfig` message if the user clicked Save.
+    pub fn on_settings_click(&mut self, rel_x: f32, rel_y: f32) -> Option<CompositorMessage> {
+        // Tab bar (y 44..70): Chat tab at x=0..w/2, Settings tab at x=w/2..w
+        if rel_y >= 44.0 && rel_y <= 70.0 {
+            let half = SIDEBAR_WIDTH / 2.0;
+            if rel_x < half {
+                self.tab = SidebarTab::Chat;
+            } else {
+                self.tab = SidebarTab::Settings;
+            }
+            return None;
+        }
+
+        if self.tab != SidebarTab::Settings {
+            return None;
+        }
+
+        // Provider radio buttons (one per row, starting at y=86)
+        let radio_start_y = 86.0;
+        let radio_h = 28.0;
+        for (i, _) in PROVIDERS.iter().enumerate() {
+            let ry = radio_start_y + i as f32 * radio_h;
+            if rel_y >= ry && rel_y < ry + radio_h && rel_x >= 14.0 && rel_x <= SIDEBAR_WIDTH - 14.0 {
+                self.settings.provider_idx = i;
+                // Auto-fill default URL for the selected provider
+                let key = PROVIDERS[i].0;
+                self.settings.api_url_input = match key {
+                    "anthropic" => "https://api.anthropic.com".to_string(),
+                    "openai"    => "https://api.openai.com".to_string(),
+                    "gemini"    => "https://generativelanguage.googleapis.com".to_string(),
+                    _           => "http://localhost:11434".to_string(),
+                };
+                return None;
+            }
+        }
+
+        // Text fields (Model, API Key, API URL) — below provider list
+        let fields_start_y = radio_start_y + PROVIDERS.len() as f32 * radio_h + 16.0;
+        let field_h = 36.0;
+        let field_gap = 44.0;
+        for i in 0..3usize {
+            let fy = fields_start_y + i as f32 * field_gap;
+            if rel_y >= fy && rel_y < fy + field_h && rel_x >= 14.0 {
+                self.settings.active_field = match i {
+                    0 => SettingsField::Model,
+                    1 => SettingsField::ApiKey,
+                    2 => SettingsField::ApiUrl,
+                    _ => SettingsField::None,
+                };
+                return None;
+            }
+        }
+
+        // Save button
+        let save_y = fields_start_y + 3.0 * field_gap + 10.0;
+        if rel_y >= save_y && rel_y < save_y + 36.0 && rel_x >= 14.0 {
+            self.settings.active_field = SettingsField::None;
+            self.settings.saved_toast = 2.5;
+            return Some(self.build_update_config());
+        }
+
+        // Clicking outside fields deselects
+        self.settings.active_field = SettingsField::None;
+        None
+    }
+
+    fn build_update_config(&self) -> CompositorMessage {
+        CompositorMessage::UpdateConfig {
+            provider: PROVIDERS[self.settings.provider_idx].0.to_string(),
+            model:    self.settings.model_input.clone(),
+            api_key:  self.settings.api_key_input.clone(),
+            api_url:  self.settings.api_url_input.clone(),
         }
     }
 
@@ -293,6 +472,85 @@ impl Sidebar {
     }
 
     // ──────────────────────────────────────────────
+    //  Settings tab rendering
+    // ──────────────────────────────────────────────
+
+    fn render_settings_tab(
+        &self,
+        renderer: &mut Renderer,
+        pixmap: &mut Pixmap,
+        ox: f32,
+        content_y: f32,
+        height: f32,
+        t: &crate::renderer::Theme,
+    ) {
+        let w = SIDEBAR_WIDTH;
+        let s = &self.settings;
+
+        // Section header: Provider
+        let mut y = content_y + 10.0;
+        renderer.draw_text(pixmap, "LLM Provider", ox + 14.0, y, w - 28.0, 10.0, t.text_muted);
+        y += 18.0;
+
+        // Provider radio buttons
+        for (i, (_, label)) in PROVIDERS.iter().enumerate() {
+            let selected = s.provider_idx == i;
+            let row_bg = if selected { [99, 102, 241, 30] } else { [0, 0, 0, 0] };
+            renderer.fill_rounded_rect(pixmap, ox + 14.0, y, w - 28.0, 24.0, 6.0, row_bg);
+            // Radio circle
+            let dot_col = if selected { t.accent } else { t.text_muted };
+            renderer.fill_rounded_rect(pixmap, ox + 22.0, y + 7.0, 10.0, 10.0, 5.0, dot_col);
+            if selected {
+                renderer.fill_rounded_rect(pixmap, ox + 25.0, y + 10.0, 4.0, 4.0, 2.0, [255, 255, 255, 255]);
+            }
+            let text_col = if selected { t.text_primary } else { t.text_secondary };
+            renderer.draw_text(pixmap, label, ox + 38.0, y + 6.0, w - 56.0, 10.0, text_col);
+            y += 28.0;
+        }
+
+        y += 8.0;
+
+        // Text field helper
+        let mut draw_field = |label: &str, value: &str, mask: bool, active: bool, fy: &mut f32| {
+            renderer.draw_text(pixmap, label, ox + 14.0, *fy, w - 28.0, 9.0, t.text_muted);
+            *fy += 14.0;
+            let border_col = if active { t.accent } else { t.border };
+            renderer.fill_rounded_rect(pixmap, ox + 14.0, *fy, w - 28.0, 30.0, 6.0, t.bg_input);
+            renderer.stroke_rect(pixmap, ox + 14.0, *fy, w - 28.0, 30.0, border_col);
+            let display = if mask && !value.is_empty() {
+                let shown = value.chars().count().saturating_sub(4);
+                format!("{}{}", "*".repeat(shown), &value[value.len().saturating_sub(4)..])
+            } else if active && self.cursor_visible {
+                format!("{}|", value)
+            } else {
+                value.to_string()
+            };
+            let text_col = if value.is_empty() { t.text_muted } else { t.text_primary };
+            renderer.draw_text(pixmap, &display, ox + 20.0, *fy + 9.0, w - 44.0, 10.0, text_col);
+            *fy += 44.0;
+        };
+
+        draw_field("Model", &s.model_input, false, s.active_field == SettingsField::Model, &mut y);
+        draw_field("API Key", &s.api_key_input, true, s.active_field == SettingsField::ApiKey, &mut y);
+        draw_field("API URL", &s.api_url_input, false, s.active_field == SettingsField::ApiUrl, &mut y);
+
+        // Save button
+        renderer.fill_rounded_rect(pixmap, ox + 14.0, y, w - 28.0, 32.0, 8.0, t.accent);
+        renderer.draw_text(pixmap, "Save Settings", ox + w / 2.0 - 42.0, y + 9.0, 100.0, 11.0, [255, 255, 255, 255]);
+        y += 42.0;
+
+        // "Saved!" toast
+        if s.saved_toast > 0.0 {
+            renderer.fill_rounded_rect(pixmap, ox + 14.0, y, w - 28.0, 28.0, 6.0, t.success);
+            renderer.draw_text(pixmap, "Saved! Agent will use new settings.", ox + 20.0, y + 8.0, w - 40.0, 10.0, [255, 255, 255, 255]);
+        }
+
+        // Bottom hint
+        let hint_y = height - 20.0;
+        renderer.draw_text(pixmap, "Settings saved to ~/.soma/config.toml", ox + 14.0, hint_y, w - 28.0, 8.0, t.text_muted);
+    }
+
+    // ──────────────────────────────────────────────
     //  Rendering
     // ──────────────────────────────────────────────
 
@@ -323,9 +581,32 @@ impl Sidebar {
         renderer.fill_rounded_rect(pixmap, ox + w - 96.0, 16.0, 6.0, 6.0, 3.0, status_color);
         renderer.draw_text(pixmap, &status_text, ox + w - 86.0, 15.0, 72.0, 10.0, status_color);
 
-        // ─── Content Area ───
-        let content_y = 48.0;
-        let content_h = height - 48.0 - 68.0;
+        // ─── Tab Bar ───
+        let tab_y = 44.0;
+        let tab_h = 26.0;
+        let half = w / 2.0;
+        renderer.fill_rect(pixmap, ox, tab_y, w, tab_h, [255, 255, 255, 3]);
+        // Chat tab
+        let chat_bg = if self.tab == SidebarTab::Chat { t.accent } else { [0, 0, 0, 0] };
+        let chat_col = if self.tab == SidebarTab::Chat { [255, 255, 255, 255] } else { t.text_muted };
+        renderer.fill_rounded_rect(pixmap, ox + 4.0, tab_y + 3.0, half - 8.0, tab_h - 6.0, 6.0, chat_bg);
+        renderer.draw_text(pixmap, "Chat", ox + half / 2.0 - 14.0, tab_y + 7.0, 60.0, 10.0, chat_col);
+        // Settings tab
+        let set_bg  = if self.tab == SidebarTab::Settings { t.accent } else { [0, 0, 0, 0] };
+        let set_col = if self.tab == SidebarTab::Settings { [255, 255, 255, 255] } else { t.text_muted };
+        renderer.fill_rounded_rect(pixmap, ox + half + 4.0, tab_y + 3.0, half - 8.0, tab_h - 6.0, 6.0, set_bg);
+        renderer.draw_text(pixmap, "Settings", ox + half + half / 2.0 - 22.0, tab_y + 7.0, 80.0, 10.0, set_col);
+        renderer.fill_rect(pixmap, ox, tab_y + tab_h, w, 1.0, t.border);
+
+        // ─── Content Area (routed by tab) ───
+        let content_y = 44.0 + tab_h + 1.0; // below tab bar
+
+        if self.tab == SidebarTab::Settings {
+            self.render_settings_tab(renderer, pixmap, ox, content_y, height, &t);
+            return;
+        }
+
+        let content_h = height - content_y - 68.0;
 
         if self.messages.is_empty() {
             let cy = content_y + content_h / 2.0 - 50.0;

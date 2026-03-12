@@ -193,6 +193,12 @@ impl SomaApp {
                     // Auto-switch the left panel to Browser so the user sees the page.
                     self.left_panel = LeftPanel::Browser;
                 }
+                soma_common::AgentMessage::ConfigUpdated { provider, model } => {
+                    self.add_toast(
+                        format!("Model: {} / {}", provider, model),
+                        [99, 102, 241, 255],
+                    );
+                }
                 _ => {}
             }
             self.sidebar.handle_agent_message(msg);
@@ -610,9 +616,14 @@ impl ApplicationHandler for SomaApp {
                                 self.focus = FocusPanel::Terminal;
                             } else {
                                 self.focus = FocusPanel::Sidebar;
-                                // Route click into sidebar (card expand / modal dismiss)
+                                let rel_x = self.mouse_x - div;
                                 let h = win.inner_size().height as f32;
-                                self.sidebar.on_sidebar_click(self.mouse_x - div, self.mouse_y, h);
+                                // Route click into sidebar — settings tab or chat tab
+                                if let Some(msg) = self.sidebar.on_settings_click(rel_x, self.mouse_y) {
+                                    self.send_to_agent(msg);
+                                } else {
+                                    self.sidebar.on_sidebar_click(rel_x, self.mouse_y, h);
+                                }
                             }
                         }
                         ElementState::Released => {
@@ -818,8 +829,13 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                     let div = display.width as f32 - sidebar_width;
                     if mouse_x >= div {
                         focus = FocusPanel::Sidebar;
+                        let rel_x = mouse_x - div;
                         let h = display.height as f32;
-                        sidebar.on_sidebar_click(mouse_x - div, mouse_y, h);
+                        if let Some(msg) = sidebar.on_settings_click(rel_x, mouse_y) {
+                            if let Some(tx) = &agent_tx { let _ = tx.send(msg); }
+                        } else {
+                            sidebar.on_sidebar_click(rel_x, mouse_y, h);
+                        }
                     } else {
                         focus = FocusPanel::Terminal;
                     }
@@ -863,6 +879,13 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                         soma_common::AgentMessage::BrowserUpdate { url, title, screenshot_base64 } => {
                             browser_panel.update(url.clone(), title.clone(), screenshot_base64.as_deref());
                             left_panel = LeftPanel::Browser;
+                        }
+                        soma_common::AgentMessage::ConfigUpdated { provider, model } => {
+                            toasts.push(Toast {
+                                message: format!("Model: {} / {}", provider, model),
+                                color: [99, 102, 241, 255],
+                                remaining: 3.5,
+                            });
                         }
                         _ => {}
                     }

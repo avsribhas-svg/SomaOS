@@ -108,6 +108,13 @@ pub enum CompositorMessage {
     DirectExec { id: String, command: String },
     /// List available capabilities
     ListCapabilities,
+    /// Update the active LLM provider configuration (hot-reload)
+    UpdateConfig {
+        provider: String,
+        model: String,
+        api_key: String,
+        api_url: String,
+    },
     /// Ping / health check
     Ping,
 }
@@ -141,6 +148,8 @@ pub enum AgentMessage {
         title: String,
         screenshot_base64: Option<String>,
     },
+    /// Active provider configuration was updated
+    ConfigUpdated { provider: String, model: String },
     /// Pong
     Pong,
 }
@@ -185,8 +194,11 @@ impl std::fmt::Display for AgentStatus {
 /// IPC socket path
 pub const AGENT_SOCKET_PATH: &str = "/tmp/soma-agent.sock";
 
-/// Default Ollama URL
+/// Default Ollama base URL (without path — paths differ between /api/generate and /api/chat)
 pub const OLLAMA_URL: &str = "http://localhost:11434/api/generate";
 
 /// Default LLM model
 pub const DEFAULT_MODEL: &str = "qwen2.5-coder:7b";
+
+/// Default Ollama base URL for chat/tool-use endpoint
+pub const OLLAMA_BASE_URL: &str = "http://localhost:11434";
