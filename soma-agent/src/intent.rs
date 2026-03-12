@@ -235,6 +235,11 @@ BROWSER (use these for anything web/internet related):
 VISION (use for image analysis):
 - ANALYZE IMAGE: "analyze image", "describe image", "what's in the image", "look at image", "read image", "what does image show"
 
+META (use when you cannot do something with existing capabilities):
+- PROPOSE CAPABILITY: "add a capability", "teach you to", "I want you to be able to", "create a new tool", "add support for", "you should be able to", "can you learn to"
+- LIST PROPOSED: "what capabilities have been proposed", "list user capabilities", "show custom capabilities"
+- DESCRIBE GAP: "note that you can't", "record that you're missing", "log a limitation"
+
 Rules:
 - For ANY website/URL/domain (e.g. "github.com", "google.com"), use BROWSER actions.
 - For vague web queries ("what is X", "how does Y work"), use browser.search.
@@ -269,6 +274,15 @@ Output: The user wants to navigate to https://apple.com and take a screenshot.
 
 Input: "analyze the image at /tmp/photo.png"
 Output: The user wants to analyze the image file at /tmp/photo.png using the vision model.
+
+Input: "I want you to be able to resize images"
+Output: The user wants to propose a new capability for resizing images using a shell tool like ImageMagick.
+
+Input: "can you learn to compress PDFs"
+Output: The user wants to propose a new capability for compressing PDF files using a shell tool.
+
+Input: "teach yourself to convert markdown to HTML"
+Output: The user wants to propose a new capability for converting Markdown files to HTML using a shell tool.
 
 RESPOND WITH EXACTLY ONE SENTENCE. NO OTHER TEXT."#;
 
@@ -340,6 +354,12 @@ Output: {{"intent":"screenshot_website","description":"Screenshot wikipedia.org"
 
 Input: "analyze the image at /tmp/photo.png"
 Output: {{"intent":"analyze_image","description":"Analyze image file","steps":[{{"capability":"vision","action":"analyze_image","params":{{"path":"/tmp/photo.png"}},"description":"Analyze image using vision model"}}],"risk_level":"low"}}
+
+Input: "propose a capability to resize images using ImageMagick"
+Output: {{"intent":"propose_capability","description":"Propose image resize capability","steps":[{{"capability":"meta","action":"propose","params":{{"name":"image_resize","description":"Resize images using ImageMagick","actions":[{{"name":"resize","description":"Resize an image to given dimensions","params":[{{"name":"path","param_type":"string","required":true,"description":"Path to image file"}},{{"name":"width","param_type":"integer","required":true,"description":"Target width in pixels"}},{{"name":"height","param_type":"integer","required":true,"description":"Target height in pixels"}}],"shell_template":"convert {{path}} -resize {{width}}x{{height}} {{path}}"}}]}},"description":"Propose image_resize capability with ImageMagick"}}],"risk_level":"medium"}}
+
+Input: "list all proposed capabilities"
+Output: {{"intent":"list_proposed_capabilities","description":"List user-defined capabilities","steps":[{{"capability":"meta","action":"list_proposed","params":{{}},"description":"List all capabilities in ~/.soma/capabilities/"}}],"risk_level":"low"}}
 
 Input: "find all log files in /var and check disk usage"
 Output: {{"intent":"inspect_system","description":"Find log files and check disk usage","steps":[{{"capability":"filesystem","action":"find","params":{{"path":"/var","pattern":"*.log"}},"description":"Find .log files in /var"}},{{"capability":"system","action":"disk_usage","params":{{}},"description":"Check disk usage"}}],"risk_level":"low"}}
