@@ -21,6 +21,7 @@ pub mod event {
         Escape,
         Tab,
         F1,
+        F2,
         ArrowUp,
         ArrowDown,
         ArrowLeft,

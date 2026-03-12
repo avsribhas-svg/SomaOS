@@ -43,18 +43,22 @@ This is a precedent system for future automation infrastructure. Instead of usin
 
 ## Abstract
 
-Current state (v0.8): SomaOS runs as a bootable Linux image with a custom bare-metal compositor.
+Current state (v0.9 + v0.8.1): SomaOS runs as a bootable Linux image with a custom bare-metal compositor.
 
 The system provides:
 - A **custom DRM/KMS compositor** that renders directly to GPU framebuffer — no X11 or Wayland server required
 - A **login screen** that boots straight into Soma, with no traditional desktop
-- An **agent daemon** with 32 structured capability actions across 8 modules (including meta + user-defined capabilities)
+- An **agent daemon** with 35 built-in capability actions across 9 modules, plus unlimited user-defined capabilities (loaded from `~/.soma/capabilities/*.json`)
+- **Browser panel** — headless Chromium integration with F2 toggle in compositor; agent can navigate, scrape, and screenshot
+- **Vision capability** — image understanding via Ollama qwen2.5-vl:7b; agent can analyze images with natural language queries
 - **On-device LLM** (qwen2.5-coder:7b via Ollama) with a three-layer intent pipeline for robust natural language understanding
 - A **Human-in-the-Loop (HITL) approval system** enforcing mandatory human review before any action
+- **Self-improvement loop** — agent proposes new capabilities via `meta.propose`; human approves through HITL; registry grows without a Rust rebuild
 - **Conversation memory** — the agent remembers recent exchanges for follow-up commands
 - **Rich result cards** — image thumbnails, line-numbered text previews, directory tree views
 - **Auto-start services** — Ollama + agent + compositor all start on boot via systemd
-- A **minimal Linux image** built with Buildroot, targeting x86_64 hardware
+- A **minimal Linux image** built with Buildroot, targeting x86_64 and ARM64 hardware
+- **GitHub Actions CI** — bootable image built and published as artifact on every push to `main`
 
 ---
 
@@ -75,12 +79,14 @@ The system provides:
 │  │  │  (daemon)       │  │  │  Chat Sidebar    │  │  │   │
 │  │  │                 │  │  │  (right panel)   │  │  │   │
 │  │  │ ┌─────────────┐ │  │  ├──────────────────┤  │  │   │
-│  │  │ │Capabilities │ │  │  │  PTY Terminal    │  │  │   │
-│  │  │ │ ├─filesystem│ │  │  │  (left panel)    │  │  │   │
-│  │  │ │ ├─process   │ │  │  ├──────────────────┤  │  │   │
-│  │  │ │ ├─system    │ │  │  │  HITL Overlay    │  │  │   │
-│  │  │ │ ├─network   │ │  │  └──────────────────┘  │  │   │
-│  │  │ │ ├─package   │ │  │                        │  │   │
+│  │  │ │Capabilities │ │  │  │  PTY Terminal OR │  │  │   │
+│  │  │ │ ├─filesystem│ │  │  │  Browser Panel   │  │  │   │
+│  │  │ │ ├─process   │ │  │  │  (left, F2 swap) │  │  │   │
+│  │  │ │ ├─system    │ │  │  ├──────────────────┤  │  │   │
+│  │  │ │ ├─network   │ │  │  │  HITL Overlay    │  │  │   │
+│  │  │ │ ├─package   │ │  │  └──────────────────┘  │  │   │
+│  │  │ │ ├─browser   │ │  │                        │  │   │
+│  │  │ │ ├─vision    │ │  │                        │  │   │
 │  │  │ │ ├─meta      │ │  │                        │  │   │
 │  │  │ │ └─[user]    │ │  │                        │  │   │
 │  │  │ └─────────────┘ │  │  evdev input           │  │   │
@@ -201,6 +207,25 @@ All paths support `~` expansion.
 | `remove` | Remove a package | High |
 
 Auto-detects package manager: `brew`, `apt`, `apk`, `dnf`, `pacman`.
+
+### Browser (4 actions)
+
+| Action | Description | Risk |
+|--------|-------------|------|
+| `navigate` | Load a URL in headless Chromium | Low |
+| `get_content` | Scrape and return text content of current page | Low |
+| `search` | Web search and return results | Low |
+| `screenshot` | Take a screenshot of the current page (saved to `/tmp/soma-browser.png`) | Low |
+
+Browser screenshots are also sent to the compositor as a `BrowserUpdate` message, which auto-switches the left panel to Browser view.
+
+### Vision (1 action)
+
+| Action | Description | Risk |
+|--------|-------------|------|
+| `analyze_image` | Describe or query an image using Ollama qwen2.5-vl:7b | Low |
+
+Env: `SOMA_VISION_MODEL` overrides the vision model (default: `qwen2.5-vl:7b`).
 
 ### Meta (3 actions)
 
@@ -328,6 +353,7 @@ Communication uses **newline-delimited JSON** over a **Unix domain socket** (`/t
 | `ExecutionComplete` | `id`, `results` | All steps finished |
 | `Error` | `id`, `message` | An error occurred |
 | `DirectOutput` | `id`, `result` | Terminal command output |
+| `BrowserUpdate` | `url`, `title`, `screenshot_base64` | Browser navigated to a new page |
 | `Pong` | — | Health check response |
 
 ### Rendering Pipeline
@@ -337,7 +363,7 @@ DRM/KMS main loop (bare metal) OR winit event loop (dev)
   → tiny-skia Pixmap (software rasterization)
     → Login screen (if not yet authenticated)
       OR
-    → Terminal panel (left, variable width, PTY)
+    → Terminal panel OR Browser panel (left, variable width; F2 to toggle)
     → Chat Sidebar panel (right, 380px default, resizable)
       → Title bar + status pill
       → Scrollable message history
@@ -608,7 +634,7 @@ A single LLM call for every command is slow and unreliable for common patterns:
 - **Privacy** — Commands and file contents never leave the machine
 - **Reliability** — No internet dependency during operation
 - **Cost** — No per-token billing
-- **Model-agnostic** — Any Ollama-compatible model can be swapped in; vision models (qwen2.5-vl) will be added alongside the task model in v0.9
+- **Model-agnostic** — Any Ollama-compatible model can be swapped in; vision models (qwen2.5-vl) run alongside the task model (qwen2.5-coder:7b) for the `vision` capability
 
 ### Why federation by design?
 

@@ -56,15 +56,17 @@
 - The self-improvement loop: agent encounters a gap → proposes a capability → human approves via HITL → registry grows → agent's task coverage expands over time
 - `~/.soma/gaps.log`: agent records capability gaps it cannot fill, for human review
 
+### v0.9 — Browser Panel + Vision
+- Browser panel in compositor left panel (F2 to toggle from PTY terminal)
+- URL bar + headless Chromium screenshot rendered in panel
+- `browser` agent capability: `navigate`, `get_content`, `search`, `screenshot` (curl + scraper + Chromium headless)
+- `vision` agent capability: `analyze_image` via Ollama qwen2.5-vl:7b (tokio block_in_place + async reqwest)
+- `BrowserUpdate { url, title, screenshot_base64 }` IPC message; compositor auto-switches to browser panel on navigation
+- Capabilities grow to 35 built-in actions (+4 browser, +1 vision)
+
 ---
 
 ## Planned
-
-### v0.9 — Browser Panel + Vision
-- Embed WebKitGTK offscreen into compositor framebuffer (no Wayland/X11 needed)
-- `browser` agent capability: `navigate`, `query_selector`, `eval`, `screenshot_region`
-- Vision fallback: multimodal LLM (qwen2.5-vl) for unknown UIs
-- Basic tab management in compositor browser panel
 
 ### v1.0 — Native App Framework
 - `AgentAPI` trait in soma-common: `describe_state`, `execute_action`, `subscribe_changes`

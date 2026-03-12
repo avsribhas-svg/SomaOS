@@ -161,6 +161,7 @@ fn evdev_key_to_code(key: Key, shift: bool, ctrl: bool) -> KeyCode {
         Key::KEY_ESC => KeyCode::Escape,
         Key::KEY_TAB => KeyCode::Tab,
         Key::KEY_F1 => KeyCode::F1,
+        Key::KEY_F2 => KeyCode::F2,
         Key::KEY_UP => KeyCode::ArrowUp,
         Key::KEY_DOWN => KeyCode::ArrowDown,
         Key::KEY_LEFT => KeyCode::ArrowLeft,
