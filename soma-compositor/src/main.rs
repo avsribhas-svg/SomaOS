@@ -756,7 +756,7 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                                 FocusPanel::Terminal => FocusPanel::Sidebar,
                             };
                         }
-                        KeyCode::F2 => {
+                        KeyCode::KEY_F2 => {
                             left_panel = match left_panel {
                                 LeftPanel::Terminal => LeftPanel::Browser,
                                 LeftPanel::Browser => LeftPanel::Terminal,
