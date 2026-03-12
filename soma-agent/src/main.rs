@@ -3,6 +3,7 @@ mod config;
 mod executor;
 mod intent;
 mod ipc;
+mod observer;
 mod providers;
 
 use log::info;

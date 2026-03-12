@@ -10,6 +10,7 @@ use crate::capabilities::CapabilityRegistry;
 use crate::config::SomaConfig;
 use crate::executor::Executor;
 use crate::intent::IntentParser;
+use crate::observer::DesktopObserver;
 
 /// Pending plans awaiting user approval
 type PendingPlans = Arc<Mutex<HashMap<String, TaskPlan>>>;
@@ -31,6 +32,7 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
     let parser = Arc::new(Mutex::new(IntentParser::new(&config)));
     let executor = Arc::new(Executor::new());
     let pending: PendingPlans = Arc::new(Mutex::new(HashMap::new()));
+    let observer = Arc::new(Mutex::new(DesktopObserver::new()));
 
     info!("Registered capabilities:");
     for cap in registry.list() {
@@ -50,6 +52,7 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
         let parser = Arc::clone(&parser);
         let executor = Arc::clone(&executor);
         let pending = Arc::clone(&pending);
+        let observer = Arc::clone(&observer);
 
         tokio::spawn(async move {
             let (reader, writer) = stream.into_split();
@@ -81,6 +84,7 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
                                     &executor,
                                     &registry,
                                     &pending,
+                                    &observer,
                                     &writer,
                                     &mut context,
                                 )
@@ -107,6 +111,7 @@ async fn handle_message(
     executor: &Executor,
     registry: &CapabilityRegistry,
     pending: &PendingPlans,
+    observer: &Arc<Mutex<DesktopObserver>>,
     writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     context: &mut Vec<(String, String)>,
 ) {
@@ -196,6 +201,11 @@ async fn handle_message(
                         }
                     }
 
+                    // Forward desktop_agent results as IPC messages
+                    if step.capability == "desktop_agent" && result.success {
+                        forward_desktop_agent_result(&result, observer, writer).await;
+                    }
+
                     results.push(result);
                 }
 
@@ -256,10 +266,79 @@ async fn handle_message(
             }
         }
 
+        // ── New v1.0 desktop messages ─────────────────────────────────────
+
+        CompositorMessage::DesktopEvent { event_type, window_title, timestamp } => {
+            observer.lock().await.observe(event_type.clone(), window_title.clone(), timestamp);
+            info!("Desktop event: {} — {}", event_type, window_title);
+            return; // No response needed
+        }
+
+        CompositorMessage::AnnotateWorkflow { name } => {
+            observer.lock().await.annotate_workflow(&name);
+            info!("Annotated workflow: {}", name);
+            return;
+        }
+
+        CompositorMessage::PrivateModeChanged { active } => {
+            observer.lock().await.set_active(!active);
+            info!("Private mode: {}", active);
+            return;
+        }
+
+        CompositorMessage::DynamicAppAction { app_id, action_id, window_id } => {
+            info!("DynamicApp action: app={} action={} win={}", app_id, action_id, window_id);
+            // Future: route to app-specific handler
+            return;
+        }
+
         CompositorMessage::Ping => AgentMessage::Pong,
     };
 
     send_message(&response, writer).await;
+}
+
+/// Forward a desktop_agent capability result as a real IPC message to the compositor.
+async fn forward_desktop_agent_result(
+    result: &soma_common::CapabilityResult,
+    observer: &Arc<Mutex<DesktopObserver>>,
+    writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+) {
+    let msg_type = result.data["ipc_message"].as_str().unwrap_or("");
+    let agent_msg = match msg_type {
+        "AgentModeStarted" => {
+            let task = result.data["task"].as_str().unwrap_or("").to_string();
+            Some(AgentMessage::AgentModeStarted { task })
+        }
+        "AgentModeEnded" => Some(AgentMessage::AgentModeEnded),
+        "SpawnApp" => {
+            let title = result.data["title"].as_str().unwrap_or("App").to_string();
+            let app_id = result.data["app_id"].as_str().unwrap_or("app").to_string();
+            let description = result.data["description"].as_str().unwrap_or("").to_string();
+            let widgets_json = result.data["widgets_json"].as_str().unwrap_or("[]").to_string();
+            Some(AgentMessage::SpawnApp { title, app_id, description, widgets_json })
+        }
+        "DesktopAction" => {
+            let action = result.data["action"].as_str().unwrap_or("").to_string();
+            Some(AgentMessage::DesktopAction { action })
+        }
+        "GetWorkflowHistory" => {
+            let history = observer.lock().await.get_history();
+            // Send the history back as a special step result (the caller will see it in data)
+            // For now, we just log it — the ExecutionComplete will contain the result
+            info!("Workflow history: {}", &history[..history.len().min(200)]);
+            None
+        }
+        "ActivityUpdate" => {
+            let text = result.data["text"].as_str().unwrap_or("").to_string();
+            Some(AgentMessage::ActivityUpdate { text })
+        }
+        _ => None,
+    };
+
+    if let Some(msg) = agent_msg {
+        send_message(&msg, writer).await;
+    }
 }
 
 async fn send_message(
@@ -274,3 +353,4 @@ async fn send_message(
         }
     }
 }
+

@@ -11,16 +11,22 @@ mod terminal;
 mod window_manager;
 
 use browser_panel::BrowserPanel;
+use dock::{Dock, DockAction, DOCK_HEIGHT};
+use desktop::MENU_BAR_H;
 use log::info;
 use renderer::Renderer;
 use sidebar::Sidebar;
 use std::sync::{Arc, Mutex};
 use terminal::Terminal;
+use window_manager::{
+    FloatingWindow, WindowContent, WindowContentType, WindowId,
+    render_window_chrome, render_dynamic_app, hit_dynamic_button,
+};
+
+use soma_common::CompositorMessage;
 
 #[cfg(feature = "drm-backend")]
 use login::{LoginResult, LoginScreen};
-#[cfg(feature = "winit-backend")]
-use soma_common::CompositorMessage;
 #[cfg(feature = "winit-backend")]
 use std::num::NonZeroU32;
 #[cfg(feature = "winit-backend")]
@@ -34,21 +40,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 #[cfg(feature = "winit-backend")]
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 #[cfg(feature = "winit-backend")]
-use winit::window::{Window, WindowAttributes, WindowId};
-
-/// Which panel has keyboard focus
-#[derive(Clone, Copy, PartialEq)]
-pub enum FocusPanel {
-    Sidebar,
-    Terminal,
-}
-
-/// Which view is shown in the left (non-sidebar) area
-#[derive(Clone, Copy, PartialEq)]
-pub enum LeftPanel {
-    Terminal,
-    Browser,
-}
+use winit::window::{Window, WindowAttributes, WindowId as WinitWindowId};
 
 /// Notification toast
 struct Toast {
@@ -56,11 +48,6 @@ struct Toast {
     color: [u8; 4],
     remaining: f32,
 }
-
-const MIN_SIDEBAR_W: f32 = 280.0;
-const MAX_SIDEBAR_W: f32 = 600.0;
-const DEFAULT_SIDEBAR_W: f32 = 380.0;
-const DIVIDER_HIT: f32 = 6.0; // hit target width for divider drag
 
 #[cfg(feature = "winit-backend")]
 struct SomaApp {
@@ -70,18 +57,24 @@ struct SomaApp {
     sidebar: Sidebar,
     terminal: Terminal,
     browser_panel: BrowserPanel,
-    focus: FocusPanel,
-    left_panel: LeftPanel,
     // IPC
     agent_tx: Option<ipc_client::AgentSender>,
     agent_rx: Option<Arc<Mutex<ipc_client::AgentReceiver>>>,
     runtime: tokio::runtime::Handle,
-    // Layout
-    sidebar_width: f32,
+    // Desktop window manager
+    windows: Vec<FloatingWindow>,
+    next_window_id: WindowId,
+    dock: Dock,
+    sidebar_visible: bool,
+    agent_mode: bool,
+    private_mode: bool,
+    activity_text: String,
+    menubar_clock: String,
     // Mouse state
     mouse_x: f32,
     mouse_y: f32,
-    dragging_divider: bool,
+    dragging_window: Option<WindowId>,
+    hover_close_window: Option<WindowId>,
     // Toasts
     toasts: Vec<Toast>,
     // Keyboard modifiers
@@ -98,15 +91,21 @@ impl SomaApp {
             sidebar: Sidebar::new(),
             terminal: Terminal::new(),
             browser_panel: BrowserPanel::new(),
-            focus: FocusPanel::Sidebar,
-            left_panel: LeftPanel::Terminal,
             agent_tx: None,
             agent_rx: None,
             runtime,
-            sidebar_width: DEFAULT_SIDEBAR_W,
+            windows: Vec::new(),
+            next_window_id: 1,
+            dock: Dock::new(),
+            sidebar_visible: false,
+            agent_mode: false,
+            private_mode: false,
+            activity_text: String::new(),
+            menubar_clock: Self::clock_string(),
             mouse_x: 0.0,
             mouse_y: 0.0,
-            dragging_divider: false,
+            dragging_window: None,
+            hover_close_window: None,
             toasts: Vec::new(),
             modifiers: ModifiersState::empty(),
         }
@@ -140,8 +139,152 @@ impl SomaApp {
         });
     }
 
+    fn clock_string() -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let hours = ((now / 3600) % 24) as u32;
+        let minutes = ((now / 60) % 60) as u32;
+        // Adjust for local timezone offset (rough: get from env or default UTC)
+        format!("{:02}:{:02}", hours, minutes)
+    }
+
+    // ── Window management helpers ──────────────────────────────────────────
+
+    fn open_or_focus_window(&mut self, content_type: WindowContentType) {
+        // If a window of this type already exists, bring it to front
+        if let Some(win) = self.windows.iter().find(|w| w.content.content_type() == Some(content_type)) {
+            let id = win.id;
+            self.bring_to_front(id);
+            return;
+        }
+        // Create new window
+        let content = match content_type {
+            WindowContentType::Terminal => WindowContent::Terminal,
+            WindowContentType::Browser => WindowContent::Browser,
+        };
+        let id = self.next_window_id;
+        self.next_window_id += 1;
+        let offset = (self.windows.len() as f32 * 30.0) % 200.0;
+        let win = FloatingWindow::new(id, content, 80.0 + offset, MENU_BAR_H + 20.0 + offset);
+        self.windows.push(win);
+        self.bring_to_front(id);
+        self.send_desktop_event("window_opened", &self.windows.last().unwrap().title.clone());
+    }
+
+    fn close_window(&mut self, window_id: WindowId) {
+        if let Some(pos) = self.windows.iter().position(|w| w.id == window_id) {
+            let title = self.windows[pos].title.clone();
+            self.windows.remove(pos);
+            self.send_desktop_event("window_closed", &title);
+            // Focus the new top window
+            if let Some(top) = self.windows.last_mut() {
+                top.is_focused = true;
+            }
+        }
+    }
+
+    fn close_focused_window(&mut self) {
+        if let Some(win) = self.windows.iter().rev().find(|w| w.is_focused) {
+            let id = win.id;
+            self.close_window(id);
+        }
+    }
+
+    fn bring_to_front(&mut self, window_id: WindowId) {
+        // Unfocus all, then move target to end and focus it
+        for w in &mut self.windows {
+            w.is_focused = false;
+        }
+        if let Some(pos) = self.windows.iter().position(|w| w.id == window_id) {
+            let mut win = self.windows.remove(pos);
+            win.is_focused = true;
+            let title = win.title.clone();
+            self.windows.push(win);
+            self.send_desktop_event("window_focused", &title);
+        }
+    }
+
+    fn spawn_dynamic_app(&mut self, title: String, app_id: String, description: String, widgets_json: String) {
+        use window_manager::AppDef;
+        let app_def = match AppDef::from_json(&format!(
+            r#"{{"app_id":"{}","description":"{}","widgets":{}}}"#,
+            app_id, description, widgets_json
+        )) {
+            Ok(d) => d,
+            Err(e) => {
+                self.add_toast(format!("SpawnApp error: {}", e), [248, 113, 113, 255]);
+                return;
+            }
+        };
+        let id = self.next_window_id;
+        self.next_window_id += 1;
+        let offset = (self.windows.len() as f32 * 30.0) % 200.0;
+        let mut win = FloatingWindow::new(id, WindowContent::DynamicApp(app_def), 120.0 + offset, MENU_BAR_H + 40.0 + offset);
+        win.title = title;
+        win.agent_owned = true;
+        // Unfocus all, focus new
+        for w in &mut self.windows {
+            w.is_focused = false;
+        }
+        win.is_focused = true;
+        self.windows.push(win);
+    }
+
+    fn handle_desktop_action(&mut self, action: &str) {
+        let parts: Vec<&str> = action.splitn(2, ':').collect();
+        match parts[0] {
+            "open_window" => {
+                if parts.len() > 1 {
+                    match parts[1] {
+                        "terminal" => self.open_or_focus_window(WindowContentType::Terminal),
+                        "browser" => self.open_or_focus_window(WindowContentType::Browser),
+                        _ => {}
+                    }
+                }
+            }
+            "close_window" => {
+                if parts.len() > 1 {
+                    let title = parts[1];
+                    if let Some(w) = self.windows.iter().find(|w| w.title == title) {
+                        let id = w.id;
+                        self.close_window(id);
+                    }
+                }
+            }
+            "focus_window" => {
+                if parts.len() > 1 {
+                    let title = parts[1];
+                    if let Some(w) = self.windows.iter().find(|w| w.title == title) {
+                        let id = w.id;
+                        self.bring_to_front(id);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn send_desktop_event(&self, event_type: &str, window_title: &str) {
+        if self.private_mode { return; }
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.send_to_agent(CompositorMessage::DesktopEvent {
+            event_type: event_type.to_string(),
+            window_title: window_title.to_string(),
+            timestamp: ts,
+        });
+    }
+
+    fn focused_window_content_type(&self) -> Option<WindowContentType> {
+        self.windows.iter().rev().find(|w| w.is_focused)
+            .and_then(|w| w.content.content_type())
+    }
+
     fn poll_agent_messages(&mut self) -> bool {
-        // Collect messages first to avoid borrow conflicts
         let messages: Vec<soma_common::AgentMessage> = if let Some(rx) = &self.agent_rx {
             if let Ok(mut rx) = rx.try_lock() {
                 let mut msgs = Vec::new();
@@ -166,52 +309,47 @@ impl SomaApp {
                     let ok = results.iter().filter(|r| r.success).count();
                     let total = results.len();
                     if ok == total {
-                        self.add_toast(
-                            format!("v Task done ({}/{})", ok, total),
-                            [74, 222, 128, 255],
-                        );
+                        self.add_toast(format!("v Task done ({}/{})", ok, total), [74, 222, 128, 255]);
                     } else {
-                        self.add_toast(
-                            format!("! Task done ({}/{})", ok, total),
-                            [248, 113, 113, 255],
-                        );
+                        self.add_toast(format!("! Task done ({}/{})", ok, total), [248, 113, 113, 255]);
                     }
                 }
                 soma_common::AgentMessage::Error { message, .. } => {
-                    self.add_toast(
-                        format!("! {}", &message[..message.len().min(40)]),
-                        [248, 113, 113, 255],
-                    );
+                    self.add_toast(format!("! {}", &message[..message.len().min(40)]), [248, 113, 113, 255]);
                 }
-                soma_common::AgentMessage::BrowserUpdate {
-                    url,
-                    title,
-                    screenshot_base64,
-                } => {
-                    self.browser_panel.update(
-                        url.clone(),
-                        title.clone(),
-                        screenshot_base64.as_deref(),
-                    );
-                    // Auto-switch the left panel to Browser so the user sees the page.
-                    self.left_panel = LeftPanel::Browser;
+                soma_common::AgentMessage::BrowserUpdate { url, title, screenshot_base64 } => {
+                    self.browser_panel.update(url.clone(), title.clone(), screenshot_base64.as_deref());
+                    // Auto-open browser window if not already open
+                    if !self.windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Browser)) {
+                        self.open_or_focus_window(WindowContentType::Browser);
+                    }
                 }
                 soma_common::AgentMessage::ConfigUpdated { provider, model } => {
-                    self.add_toast(
-                        format!("Model: {} / {}", provider, model),
-                        [99, 102, 241, 255],
-                    );
+                    self.add_toast(format!("Model: {} / {}", provider, model), [99, 102, 241, 255]);
+                }
+                soma_common::AgentMessage::AgentModeStarted { task } => {
+                    self.agent_mode = true;
+                    self.activity_text = task.clone();
+                }
+                soma_common::AgentMessage::AgentModeEnded => {
+                    self.agent_mode = false;
+                    self.activity_text.clear();
+                }
+                soma_common::AgentMessage::SpawnApp { title, app_id, description, widgets_json } => {
+                    self.spawn_dynamic_app(title.clone(), app_id.clone(), description.clone(), widgets_json.clone());
+                }
+                soma_common::AgentMessage::DesktopAction { action } => {
+                    let action = action.clone();
+                    self.handle_desktop_action(&action);
+                }
+                soma_common::AgentMessage::ActivityUpdate { text } => {
+                    self.activity_text = text.clone();
                 }
                 _ => {}
             }
             self.sidebar.handle_agent_message(msg);
         }
         got_message
-    }
-
-    /// Get the X position of the divider (left edge of sidebar)
-    fn divider_x(&self, total_w: f32) -> f32 {
-        (total_w - self.sidebar_width).max(0.0)
     }
 
     fn redraw(&mut self) {
@@ -242,8 +380,6 @@ impl SomaApp {
             None => return,
         };
 
-        pixmap.fill(tiny_skia::Color::from_rgba8(30, 30, 30, 255));
-
         let w = width as f32;
         let h = height as f32;
         let dt = 1.0 / 60.0;
@@ -264,124 +400,116 @@ impl SomaApp {
             t.remaining > 0.0
         });
 
-        // Layout
-        let divider = self.divider_x(w);
-        let left_w = divider;
-        let sidebar_x = divider;
+        // Update clock periodically
+        self.menubar_clock = Self::clock_string();
 
-        // Render left panel (Terminal or Browser)
-        if left_w > 10.0 {
-            match self.left_panel {
-                LeftPanel::Terminal => {
-                    self.terminal
-                        .render(&mut self.renderer, &mut pixmap, 0.0, 0.0, left_w, h);
+        // Sync dock state
+        let has_terminal = self.windows.iter().any(|win| win.content.content_type() == Some(WindowContentType::Terminal));
+        let has_browser = self.windows.iter().any(|win| win.content.content_type() == Some(WindowContentType::Browser));
+        self.dock.sync_open_state(has_terminal, has_browser, self.agent_mode, self.sidebar_visible, self.private_mode);
+
+        // Update dock hover
+        self.dock.hovered_idx = self.dock.hit_test(self.mouse_x, self.mouse_y, w, h);
+
+        // Update window close hover
+        self.hover_close_window = None;
+        for win in self.windows.iter().rev() {
+            if win.hit_close(self.mouse_x, self.mouse_y) {
+                self.hover_close_window = Some(win.id);
+                break;
+            }
+        }
+
+        // Initialise sidebar slide position if not yet set
+        if self.sidebar.slide_x == f32::MAX {
+            self.sidebar.slide_x = w; // off-screen right
+            self.sidebar.slide_target_x = w;
+        }
+        // Drive sidebar slide target
+        let sidebar_w = sidebar::SIDEBAR_WIDTH;
+        self.sidebar.slide_target_x = if self.sidebar_visible { w - sidebar_w } else { w };
+
+        // ═══════════════════════════════════════════════════════════════════
+        //  9-LAYER COMPOSITOR STACK
+        // ═══════════════════════════════════════════════════════════════════
+
+        // Layer 1: Desktop wallpaper
+        desktop::render_desktop(&mut self.renderer, &mut pixmap, w, h);
+
+        // Layer 2: Floating windows (back to front)
+        for i in 0..self.windows.len() {
+            let win = &self.windows[i];
+            if win.is_minimized { continue; }
+            let is_hover_close = self.hover_close_window == Some(win.id);
+            render_window_chrome(&mut self.renderer, &mut pixmap, win, is_hover_close);
+
+            // Render window content
+            let (cx, cy, cw, ch) = win.content_rect();
+            match &win.content {
+                WindowContent::Terminal => {
+                    self.terminal.render(&mut self.renderer, &mut pixmap, cx, cy, cw, ch);
                 }
-                LeftPanel::Browser => {
-                    self.browser_panel
-                        .render(&mut self.renderer, &mut pixmap, 0.0, 0.0, left_w, h);
-                    // F2 hint in bottom-left
-                    self.renderer.draw_text(
-                        &mut pixmap,
-                        "F2=Terminal",
-                        4.0,
-                        h - 14.0,
-                        80.0,
-                        8.0,
-                        [255, 255, 255, 40],
-                    );
+                WindowContent::Browser => {
+                    self.browser_panel.render(&mut self.renderer, &mut pixmap, cx, cy, cw, ch);
+                }
+                WindowContent::DynamicApp(_) => {
+                    let win_ref = &self.windows[i];
+                    render_dynamic_app(&mut self.renderer, &mut pixmap, win_ref, self.mouse_x, self.mouse_y);
                 }
             }
         }
 
-        // Render sidebar on the RIGHT
-        self.sidebar
-            .render(&mut self.renderer, &mut pixmap, sidebar_x, 0.0, h);
-
-        // Divider handle
-        let divider_color = if self.dragging_divider {
-            [129, 140, 248, 120]
-        } else if (self.mouse_x - divider).abs() < DIVIDER_HIT {
-            [129, 140, 248, 60]
-        } else {
-            [255, 255, 255, 15]
-        };
-        self.renderer
-            .fill_rect(&mut pixmap, divider - 1.0, 0.0, 2.0, h, divider_color);
-
-        // Focus indicator
-        let focus_color = [129, 140, 248, 40];
-        match self.focus {
-            FocusPanel::Sidebar => {
-                self.renderer
-                    .fill_rect(&mut pixmap, sidebar_x, 0.0, 2.0, h, focus_color);
-            }
-            FocusPanel::Terminal => {
-                self.renderer
-                    .fill_rect(&mut pixmap, 0.0, 0.0, 2.0, h, focus_color);
-            }
+        // Layer 3: Agent mode tint (2px accent border)
+        if self.agent_mode {
+            let t = self.renderer.theme.clone();
+            self.renderer.fill_rect(&mut pixmap, 0.0, 0.0, w, 2.0, t.agent_active);
+            self.renderer.fill_rect(&mut pixmap, 0.0, h - 2.0, w, 2.0, t.agent_active);
+            self.renderer.fill_rect(&mut pixmap, 0.0, 0.0, 2.0, h, t.agent_active);
+            self.renderer.fill_rect(&mut pixmap, w - 2.0, 0.0, 2.0, h, t.agent_active);
         }
 
-        // Left panel tab indicator (top-left corner)
-        {
-            let tab_label = match self.left_panel {
-                LeftPanel::Terminal => "[T] Terminal  F2=Browser",
-                LeftPanel::Browser => "[B] Browser   F2=Terminal",
-            };
-            self.renderer.draw_text(
-                &mut pixmap,
-                tab_label,
-                6.0,
-                4.0,
-                200.0,
-                8.0,
-                [255, 255, 255, 30],
-            );
+        // Layer 4: Menu bar
+        let status = self.sidebar.status;
+        desktop::render_menu_bar(
+            &mut self.renderer, &mut pixmap, w,
+            &status, &self.activity_text, self.private_mode, &self.menubar_clock,
+        );
+
+        // Layer 5: Dock
+        dock::render_dock(&mut self.renderer, &mut pixmap, &self.dock, w, h);
+
+        // Layer 6: AI Sidebar overlay (slide animation)
+        if self.sidebar.slide_x < w {
+            self.sidebar.render(&mut self.renderer, &mut pixmap, self.sidebar.slide_x, MENU_BAR_H, h - MENU_BAR_H - DOCK_HEIGHT);
         }
 
-        // HITL overlay
+        // Layer 7: HITL overlay
         if self.sidebar.status == soma_common::AgentStatus::AwaitingApproval {
-            self.sidebar
-                .render_approval_overlay(&mut self.renderer, &mut pixmap, w, h);
+            self.sidebar.render_approval_overlay(&mut self.renderer, &mut pixmap, w, h);
         }
 
-        // Detail modal for clicked error/result cards
+        // Layer 8: Detail modal
         if self.sidebar.expanded_msg_idx.is_some() {
-            self.sidebar
-                .render_expanded_msg(&mut self.renderer, &mut pixmap, w, h);
+            self.sidebar.render_expanded_msg(&mut self.renderer, &mut pixmap, w, h);
         }
 
-        // Render toasts (top-right, above sidebar)
-        let mut toast_y = 8.0;
+        // Layer 9: Toast notifications (top-right)
+        let mut toast_y = MENU_BAR_H + 8.0;
         for toast in &self.toasts {
-            let alpha = if toast.remaining < 0.5 {
-                (toast.remaining / 0.5 * 255.0) as u8
-            } else {
-                255
-            };
+            let alpha = if toast.remaining < 0.5 { (toast.remaining / 0.5 * 255.0) as u8 } else { 255 };
             let tw = 260.0_f32.min(w - 20.0);
             let tx = w - tw - 10.0;
-            self.renderer.fill_rounded_rect(
-                &mut pixmap,
-                tx,
-                toast_y,
-                tw,
-                28.0,
-                8.0,
-                [toast.color[0], toast.color[1], toast.color[2], (alpha / 4).max(20)],
-            );
-            self.renderer.draw_text(
-                &mut pixmap,
-                &toast.message,
-                tx + 10.0,
-                toast_y + 7.0,
-                tw - 20.0,
-                10.0,
-                [toast.color[0], toast.color[1], toast.color[2], alpha],
-            );
+            self.renderer.fill_rounded_rect(&mut pixmap, tx, toast_y, tw, 28.0, 8.0,
+                [toast.color[0], toast.color[1], toast.color[2], (alpha / 4).max(20)]);
+            self.renderer.draw_text(&mut pixmap, &toast.message, tx + 10.0, toast_y + 7.0, tw - 20.0, 10.0,
+                [toast.color[0], toast.color[1], toast.color[2], alpha]);
             toast_y += 34.0;
         }
 
-        // Present
+        // ═══════════════════════════════════════════════════════════════════
+        //  PRESENT
+        // ═══════════════════════════════════════════════════════════════════
+
         if let Some(surface) = &mut self.surface {
             let mut buffer = surface.buffer_mut().unwrap();
             let pixels = pixmap.pixels();
@@ -393,14 +521,14 @@ impl SomaApp {
             let _ = buffer.present();
         }
 
-        // Request continuous redraw when needed
+        // Continuous redraw triggers
+        let sidebar_animating = self.sidebar.slide_x != self.sidebar.slide_target_x;
         let needs_redraw = got_agent_msg
             || pty_data
             || !self.toasts.is_empty()
-            || matches!(
-                self.sidebar.status,
-                soma_common::AgentStatus::Thinking | soma_common::AgentStatus::Executing
-            );
+            || sidebar_animating
+            || self.agent_mode
+            || matches!(self.sidebar.status, soma_common::AgentStatus::Thinking | soma_common::AgentStatus::Executing);
         if needs_redraw {
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -435,7 +563,7 @@ impl ApplicationHandler for SomaApp {
         info!("SomaOS compositor window created");
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WinitWindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -450,10 +578,6 @@ impl ApplicationHandler for SomaApp {
                         );
                     }
                 }
-                // Clamp sidebar width on resize
-                let w = width as f32;
-                let max_sidebar_w = (w - 200.0).min(MAX_SIDEBAR_W).max(MIN_SIDEBAR_W);
-                self.sidebar_width = self.sidebar_width.clamp(MIN_SIDEBAR_W, max_sidebar_w);
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -468,101 +592,121 @@ impl ApplicationHandler for SomaApp {
             }
 
             WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        logical_key,
-                        state: ElementState::Pressed,
-                        ..
-                    },
+                event: KeyEvent { logical_key, state: ElementState::Pressed, .. },
                 ..
             } => {
+                let cmd = self.modifiers.super_key();
+                let shift = self.modifiers.shift_key();
                 let ctrl = self.modifiers.control_key();
 
                 match &logical_key {
-                    // Tab: switch focus ONLY when terminal doesn't need it
-                    Key::Named(NamedKey::Tab) => {
-                        if self.focus == FocusPanel::Terminal {
-                            // Send tab to PTY for shell completion
-                            self.terminal.on_tab();
-                        } else {
-                            // In sidebar, tab switches panels
-                            self.focus = FocusPanel::Terminal;
+                    // ── Desktop shortcuts (Cmd+key) ──────────────────────────
+                    Key::Named(NamedKey::Space) if cmd => {
+                        // Cmd+Space: toggle sidebar
+                        self.sidebar_visible = !self.sidebar_visible;
+                    }
+                    Key::Character(c) if cmd && !shift => {
+                        match c.as_str() {
+                            "t" => self.open_or_focus_window(WindowContentType::Terminal),
+                            "w" => self.close_focused_window(),
+                            _ => {}
+                        }
+                    }
+                    Key::Character(c) if cmd && shift => {
+                        match c.as_str() {
+                            "A" | "a" => {
+                                self.agent_mode = !self.agent_mode;
+                                if self.agent_mode {
+                                    self.activity_text = "Agent mode active".to_string();
+                                } else {
+                                    self.activity_text.clear();
+                                }
+                            }
+                            "P" | "p" => {
+                                self.private_mode = !self.private_mode;
+                                self.send_to_agent(CompositorMessage::PrivateModeChanged { active: self.private_mode });
+                            }
+                            _ => {}
                         }
                     }
 
-                    // F1 toggles keyboard focus between sidebar and terminal
-                    Key::Named(NamedKey::F1) => {
-                        self.focus = match self.focus {
-                            FocusPanel::Sidebar => FocusPanel::Terminal,
-                            FocusPanel::Terminal => FocusPanel::Sidebar,
-                        };
+                    // ── Tab ───────────────────────────────────────────────────
+                    Key::Named(NamedKey::Tab) => {
+                        if self.focused_window_content_type() == Some(WindowContentType::Terminal) {
+                            self.terminal.on_tab();
+                        } else if self.sidebar_visible {
+                            // Could cycle focus; for now no-op in sidebar
+                        }
                     }
 
-                    // F2 toggles left panel between Terminal and Browser
-                    Key::Named(NamedKey::F2) => {
-                        self.left_panel = match self.left_panel {
-                            LeftPanel::Terminal => LeftPanel::Browser,
-                            LeftPanel::Browser => LeftPanel::Terminal,
-                        };
+                    // ── Escape ────────────────────────────────────────────────
+                    Key::Named(NamedKey::Escape) => {
+                        if self.sidebar.expanded_msg_idx.is_some() {
+                            self.sidebar.expanded_msg_idx = None;
+                        } else if let Some(msg) = self.sidebar.on_reject() {
+                            self.send_to_agent(msg);
+                        } else if self.sidebar_visible {
+                            self.sidebar_visible = false;
+                        }
                     }
 
-                    Key::Named(NamedKey::Enter) => match self.focus {
-                        FocusPanel::Sidebar => {
+                    // ── Enter ─────────────────────────────────────────────────
+                    Key::Named(NamedKey::Enter) => {
+                        if self.sidebar_visible {
                             if let Some(msg) = self.sidebar.on_submit() {
                                 self.send_to_agent(msg);
                             }
-                        }
-                        FocusPanel::Terminal => {
+                        } else if self.focused_window_content_type() == Some(WindowContentType::Terminal) {
                             self.terminal.on_submit();
-                        }
-                    },
-
-                    Key::Named(NamedKey::Backspace) => match self.focus {
-                        FocusPanel::Sidebar => self.sidebar.on_backspace(),
-                        FocusPanel::Terminal => self.terminal.on_backspace(),
-                    },
-
-                    Key::Named(NamedKey::Escape) => {
-                        if let Some(msg) = self.sidebar.on_reject() {
-                            self.send_to_agent(msg);
-                        } else if self.focus == FocusPanel::Terminal {
-                            // Switch to sidebar
-                            self.focus = FocusPanel::Sidebar;
                         }
                     }
 
+                    // ── Backspace ─────────────────────────────────────────────
+                    Key::Named(NamedKey::Backspace) => {
+                        if self.sidebar_visible {
+                            self.sidebar.on_backspace();
+                        } else if self.focused_window_content_type() == Some(WindowContentType::Terminal) {
+                            self.terminal.on_backspace();
+                        }
+                    }
+
+                    // ── Arrow keys ────────────────────────────────────────────
                     Key::Named(NamedKey::ArrowUp) => {
-                        if self.focus == FocusPanel::Terminal {
+                        if self.focused_window_content_type() == Some(WindowContentType::Terminal) {
                             self.terminal.on_key_up();
                         }
                     }
-
                     Key::Named(NamedKey::ArrowDown) => {
-                        if self.focus == FocusPanel::Terminal {
+                        if self.focused_window_content_type() == Some(WindowContentType::Terminal) {
                             self.terminal.on_key_down();
                         }
                     }
 
-                    Key::Named(NamedKey::Space) => match self.focus {
-                        FocusPanel::Sidebar => self.sidebar.on_char(' '),
-                        FocusPanel::Terminal => self.terminal.on_char(' '),
-                    },
+                    // ── Space (non-cmd) ───────────────────────────────────────
+                    Key::Named(NamedKey::Space) => {
+                        if self.sidebar_visible {
+                            self.sidebar.on_char(' ');
+                        } else if self.focused_window_content_type() == Some(WindowContentType::Terminal) {
+                            self.terminal.on_char(' ');
+                        }
+                    }
 
-                    Key::Character(c) => {
-                        // Handle Ctrl combos in terminal
-                        if ctrl && self.focus == FocusPanel::Terminal {
+                    // ── Character input ───────────────────────────────────────
+                    Key::Character(c) if !cmd => {
+                        if ctrl && self.focused_window_content_type() == Some(WindowContentType::Terminal) {
                             match c.as_str() {
                                 "c" => self.terminal.on_ctrl_c(),
                                 "d" => self.terminal.on_ctrl_d(),
                                 "l" => self.terminal.on_ctrl_l(),
                                 _ => {}
                             }
-                        } else {
+                        } else if self.sidebar_visible {
                             for ch in c.chars() {
-                                match self.focus {
-                                    FocusPanel::Sidebar => self.sidebar.on_char(ch),
-                                    FocusPanel::Terminal => self.terminal.on_char(ch),
-                                }
+                                self.sidebar.on_char(ch);
+                            }
+                        } else if self.focused_window_content_type() == Some(WindowContentType::Terminal) {
+                            for ch in c.chars() {
+                                self.terminal.on_char(ch);
                             }
                         }
                     }
@@ -579,63 +723,123 @@ impl ApplicationHandler for SomaApp {
                 self.mouse_x = position.x as f32;
                 self.mouse_y = position.y as f32;
 
-                // Handle divider drag
-                if self.dragging_divider {
-                    if let Some(win) = &self.window {
-                        let total_w = win.inner_size().width as f32;
-                        let max_sidebar_w = MAX_SIDEBAR_W.min(total_w - 200.0).max(MIN_SIDEBAR_W);
-                        let new_sidebar_w = (total_w - self.mouse_x).clamp(MIN_SIDEBAR_W, max_sidebar_w);
-                        self.sidebar_width = new_sidebar_w;
-                        win.request_redraw();
+                // Handle window dragging
+                if let Some(drag_id) = self.dragging_window {
+                    if let Some(win) = self.windows.iter_mut().find(|w| w.id == drag_id) {
+                        win.x = self.mouse_x - win.drag_offset_x;
+                        win.y = self.mouse_y - win.drag_offset_y;
                     }
-                }
-
-                // Update cursor for divider hover
-                if let Some(win) = &self.window {
-                    let total_w = win.inner_size().width as f32;
-                    let div = self.divider_x(total_w);
-                    if (self.mouse_x - div).abs() < DIVIDER_HIT {
-                        win.set_cursor(winit::window::Cursor::Icon(winit::window::CursorIcon::ColResize));
-                    } else {
-                        win.set_cursor(winit::window::Cursor::Icon(winit::window::CursorIcon::Default));
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
                     }
                 }
             }
 
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Left,
-                ..
-            } => {
-                if let Some(win) = &self.window {
-                    let total_w = win.inner_size().width as f32;
-                    let div = self.divider_x(total_w);
+            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                let win_size = self.window.as_ref().map(|w| w.inner_size());
+                let (total_w, total_h) = match win_size {
+                    Some(s) => (s.width as f32, s.height as f32),
+                    None => return,
+                };
 
-                    match state {
-                        ElementState::Pressed => {
-                            if (self.mouse_x - div).abs() < DIVIDER_HIT {
-                                // Start divider drag
-                                self.dragging_divider = true;
-                            } else if self.mouse_x < div {
-                                // Left panel clicked: focus terminal (keyboard) regardless of view
-                                self.focus = FocusPanel::Terminal;
+                match state {
+                    ElementState::Pressed => {
+                        // ── Priority-based mouse routing ──────────────────
+                        let mx = self.mouse_x;
+                        let my = self.mouse_y;
+
+                        // 1. HITL overlay
+                        if self.sidebar.status == soma_common::AgentStatus::AwaitingApproval {
+                            if let Some(msg) = self.sidebar.on_approve() {
+                                self.send_to_agent(msg);
+                            }
+                            // HITL consumes all clicks
+                        }
+                        // 2. Expanded modal
+                        else if self.sidebar.expanded_msg_idx.is_some() {
+                            self.sidebar.expanded_msg_idx = None;
+                        }
+                        // 3. Sidebar overlay
+                        else if self.sidebar_visible && self.sidebar.slide_x < total_w && mx >= self.sidebar.slide_x {
+                            let rel_x = mx - self.sidebar.slide_x;
+                            let sidebar_h = total_h - MENU_BAR_H - DOCK_HEIGHT;
+                            let rel_y = my - MENU_BAR_H;
+                            if let Some(msg) = self.sidebar.on_settings_click(rel_x, rel_y) {
+                                self.send_to_agent(msg);
                             } else {
-                                self.focus = FocusPanel::Sidebar;
-                                let rel_x = self.mouse_x - div;
-                                let h = win.inner_size().height as f32;
-                                // Route click into sidebar — settings tab or chat tab
-                                if let Some(msg) = self.sidebar.on_settings_click(rel_x, self.mouse_y) {
-                                    self.send_to_agent(msg);
-                                } else {
-                                    self.sidebar.on_sidebar_click(rel_x, self.mouse_y, h);
+                                self.sidebar.on_sidebar_click(rel_x, rel_y, sidebar_h);
+                            }
+                        }
+                        // 4. Dock
+                        else if let Some(idx) = self.dock.hit_test(mx, my, total_w, total_h) {
+                            if idx < self.dock.apps.len() {
+                                match &self.dock.apps[idx].action {
+                                    DockAction::OpenWindow(WindowContentType::Terminal) => self.open_or_focus_window(WindowContentType::Terminal),
+                                    DockAction::OpenWindow(WindowContentType::Browser) => self.open_or_focus_window(WindowContentType::Browser),
+                                    DockAction::ToggleAgentMode => {
+                                        self.agent_mode = !self.agent_mode;
+                                        if self.agent_mode { self.activity_text = "Agent mode active".to_string(); }
+                                        else { self.activity_text.clear(); }
+                                    }
+                                    DockAction::ToggleSidebar => {
+                                        self.sidebar_visible = !self.sidebar_visible;
+                                    }
+                                    DockAction::TogglePrivateMode => {
+                                        self.private_mode = !self.private_mode;
+                                        self.send_to_agent(CompositorMessage::PrivateModeChanged { active: self.private_mode });
+                                    }
                                 }
                             }
                         }
-                        ElementState::Released => {
-                            self.dragging_divider = false;
+                        // 5. Menu bar (y < MENU_BAR_H) — no-op for now
+                        else if my < MENU_BAR_H {
+                            // Future: menu bar actions
+                        }
+                        // 6. Windows (top to back — reverse iterate)
+                        else {
+                            let mut clicked_window: Option<(WindowId, bool)> = None; // (id, is_close)
+                            for win in self.windows.iter().rev() {
+                                if win.is_minimized { continue; }
+                                if !win.hit_frame(mx, my) { continue; }
+                                if win.hit_close(mx, my) {
+                                    clicked_window = Some((win.id, true));
+                                    break;
+                                }
+                                if win.hit_titlebar(mx, my) {
+                                    clicked_window = Some((win.id, false));
+                                    break;
+                                }
+                                // hit content area
+                                clicked_window = Some((win.id, false));
+                                break;
+                            }
+
+                            if let Some((id, is_close)) = clicked_window {
+                                if is_close {
+                                    self.close_window(id);
+                                } else {
+                                    self.bring_to_front(id);
+                                    // Start drag if titlebar
+                                    if let Some(win) = self.windows.iter().find(|w| w.id == id) {
+                                        if win.hit_titlebar(mx, my) {
+                                            if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                                                w.drag_offset_x = mx - w.x;
+                                                w.drag_offset_y = my - w.y;
+                                            }
+                                            self.dragging_window = Some(id);
+                                        }
+                                    }
+                                }
+                            }
+                            // else: clicked desktop — deselect all
                         }
                     }
-                    win.request_redraw();
+                    ElementState::Released => {
+                        self.dragging_window = None;
+                    }
+                }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
                 }
             }
 
@@ -645,19 +849,22 @@ impl ApplicationHandler for SomaApp {
                     MouseScrollDelta::PixelDelta(pos) => -(pos.y as f32) * 1.5,
                 };
 
-                // Scroll whichever panel the mouse is over
-                if let Some(win) = &self.window {
-                    let total_w = win.inner_size().width as f32;
-                    let div = self.divider_x(total_w);
-                    if self.mouse_x < div {
-                        match self.left_panel {
-                            LeftPanel::Terminal => self.terminal.scroll(scroll_amount),
-                            LeftPanel::Browser => self.browser_panel.scroll(scroll_amount),
-                        }
-                    } else {
-                        self.sidebar.scroll(scroll_amount);
+                // Route scroll to whichever UI element mouse is over
+                if self.sidebar_visible && self.mouse_x >= self.sidebar.slide_x {
+                    self.sidebar.scroll(scroll_amount);
+                } else {
+                    // Check if mouse is over a window
+                    let content_type = self.windows.iter().rev()
+                        .find(|w| w.hit_frame(self.mouse_x, self.mouse_y))
+                        .and_then(|w| w.content.content_type());
+                    match content_type {
+                        Some(WindowContentType::Terminal) => self.terminal.scroll(scroll_amount),
+                        Some(WindowContentType::Browser) => self.browser_panel.scroll(scroll_amount),
+                        _ => {}
                     }
-                    win.request_redraw();
+                }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
                 }
             }
 
@@ -713,11 +920,19 @@ fn drm_main(runtime: tokio::runtime::Handle) {
     let mut browser_panel = BrowserPanel::new();
     let mut login = LoginScreen::new();
 
-    let mut focus = FocusPanel::Sidebar;
-    let mut left_panel = LeftPanel::Terminal;
-    let mut sidebar_width: f32 = 380.0;
+    // Desktop state
+    let mut windows: Vec<FloatingWindow> = Vec::new();
+    let mut next_window_id: WindowId = 1;
+    let mut dock = Dock::new();
+    let mut sidebar_visible = false;
+    let mut agent_mode = false;
+    let mut private_mode = false;
+    let mut activity_text = String::new();
+    let mut menubar_clock = String::new();
+
     let mut mouse_x = display.width as f32 / 2.0;
     let mut mouse_y = display.height as f32 / 2.0;
+    let mut dragging_window: Option<WindowId> = None;
     let mut toasts: Vec<Toast> = Vec::new();
 
     // IPC
@@ -732,7 +947,12 @@ fn drm_main(runtime: tokio::runtime::Handle) {
         }
     };
 
-    let target_frame = Duration::from_millis(16); // ~60 fps
+    // Helper closures for DRM (no self, functional style)
+    let send_msg = |tx: &Option<ipc_client::AgentSender>, msg: CompositorMessage| {
+        if let Some(tx) = tx { let _ = tx.send(msg); }
+    };
+
+    let target_frame = Duration::from_millis(16);
     let mut last = Instant::now();
 
     loop {
@@ -744,6 +964,9 @@ fn drm_main(runtime: tokio::runtime::Handle) {
         let events = evdev.poll();
         mouse_x = evdev.mouse_x;
         mouse_y = evdev.mouse_y;
+
+        let wf = display.width as f32;
+        let hf = display.height as f32;
 
         for ev in events {
             // Login intercepts everything until granted
@@ -765,57 +988,89 @@ fn drm_main(runtime: tokio::runtime::Handle) {
             // Normal compositor input
             match ev {
                 InputEvent::KeyPress { code, .. } => {
+                    // Check focused window content type
+                    let focused_is_terminal = windows.iter().rev()
+                        .find(|w| w.is_focused)
+                        .and_then(|w| w.content.content_type()) == Some(WindowContentType::Terminal);
+
                     match code {
+                        // F1: Open/focus Terminal
                         KeyCode::F1 => {
-                            focus = match focus {
-                                FocusPanel::Sidebar => FocusPanel::Terminal,
-                                FocusPanel::Terminal => FocusPanel::Sidebar,
-                            };
+                            if let Some(win) = windows.iter().find(|w| w.content.content_type() == Some(WindowContentType::Terminal)) {
+                                let id = win.id;
+                                for w in &mut windows { w.is_focused = false; }
+                                if let Some(pos) = windows.iter().position(|w| w.id == id) {
+                                    let mut w = windows.remove(pos);
+                                    w.is_focused = true;
+                                    windows.push(w);
+                                }
+                            } else {
+                                let id = next_window_id; next_window_id += 1;
+                                let offset = (windows.len() as f32 * 30.0) % 200.0;
+                                let win = FloatingWindow::new(id, WindowContent::Terminal, 80.0 + offset, MENU_BAR_H + 20.0 + offset);
+                                windows.push(win);
+                                for w in &mut windows { w.is_focused = false; }
+                                windows.last_mut().unwrap().is_focused = true;
+                            }
                         }
+                        // F2: Close focused window
                         KeyCode::F2 => {
-                            left_panel = match left_panel {
-                                LeftPanel::Terminal => LeftPanel::Browser,
-                                LeftPanel::Browser => LeftPanel::Terminal,
-                            };
+                            if let Some(win) = windows.iter().rev().find(|w| w.is_focused) {
+                                let id = win.id;
+                                windows.retain(|w| w.id != id);
+                                if let Some(top) = windows.last_mut() { top.is_focused = true; }
+                            }
+                        }
+                        // F3: Toggle sidebar
+                        KeyCode::F3 => { sidebar_visible = !sidebar_visible; }
+                        // F4: Toggle agent mode
+                        KeyCode::F4 => {
+                            agent_mode = !agent_mode;
+                            if agent_mode { activity_text = "Agent mode active".to_string(); }
+                            else { activity_text.clear(); }
+                        }
+                        // F5: Toggle private mode
+                        KeyCode::F5 => {
+                            private_mode = !private_mode;
+                            send_msg(&agent_tx, CompositorMessage::PrivateModeChanged { active: private_mode });
                         }
                         KeyCode::Tab => {
-                            if focus == FocusPanel::Terminal {
-                                terminal.on_tab();
-                            } else {
-                                focus = FocusPanel::Terminal;
-                            }
+                            if focused_is_terminal { terminal.on_tab(); }
                         }
-                        KeyCode::Enter => match focus {
-                            FocusPanel::Sidebar => {
+                        KeyCode::Enter => {
+                            if sidebar_visible {
                                 if let Some(msg) = sidebar.on_submit() {
-                                    if let Some(tx) = &agent_tx { let _ = tx.send(msg); }
+                                    send_msg(&agent_tx, msg);
                                 }
-                            }
-                            FocusPanel::Terminal => {
+                            } else if focused_is_terminal {
                                 terminal.on_submit();
                             }
-                        },
-                        KeyCode::Backspace => match focus {
-                            FocusPanel::Sidebar => sidebar.on_backspace(),
-                            FocusPanel::Terminal => terminal.on_backspace(),
-                        },
+                        }
+                        KeyCode::Backspace => {
+                            if sidebar_visible { sidebar.on_backspace(); }
+                            else if focused_is_terminal { terminal.on_backspace(); }
+                        }
                         KeyCode::Escape => {
-                            if let Some(msg) = sidebar.on_reject() {
-                                if let Some(tx) = &agent_tx { let _ = tx.send(msg); }
+                            if sidebar.expanded_msg_idx.is_some() {
+                                sidebar.expanded_msg_idx = None;
+                            } else if let Some(msg) = sidebar.on_reject() {
+                                send_msg(&agent_tx, msg);
+                            } else if sidebar_visible {
+                                sidebar_visible = false;
                             }
                         }
-                        KeyCode::ArrowUp => { if focus == FocusPanel::Terminal { terminal.on_key_up(); } }
-                        KeyCode::ArrowDown => { if focus == FocusPanel::Terminal { terminal.on_key_down(); } }
-                        KeyCode::Space => match focus {
-                            FocusPanel::Sidebar => sidebar.on_char(' '),
-                            FocusPanel::Terminal => terminal.on_char(' '),
-                        },
-                        KeyCode::Char(c) => match focus {
-                            FocusPanel::Sidebar => sidebar.on_char(c),
-                            FocusPanel::Terminal => terminal.on_char(c),
-                        },
+                        KeyCode::ArrowUp => { if focused_is_terminal { terminal.on_key_up(); } }
+                        KeyCode::ArrowDown => { if focused_is_terminal { terminal.on_key_down(); } }
+                        KeyCode::Space => {
+                            if sidebar_visible { sidebar.on_char(' '); }
+                            else if focused_is_terminal { terminal.on_char(' '); }
+                        }
+                        KeyCode::Char(c) => {
+                            if sidebar_visible { sidebar.on_char(c); }
+                            else if focused_is_terminal { terminal.on_char(c); }
+                        }
                         KeyCode::Ctrl(c) => {
-                            if focus == FocusPanel::Terminal {
+                            if focused_is_terminal {
                                 match c {
                                     'c' => terminal.on_ctrl_c(),
                                     'd' => terminal.on_ctrl_d(),
@@ -829,31 +1084,111 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                 }
                 InputEvent::MouseMove { x, y } => {
                     mouse_x = x; mouse_y = y;
+                    // Handle window dragging
+                    if let Some(drag_id) = dragging_window {
+                        if let Some(win) = windows.iter_mut().find(|w| w.id == drag_id) {
+                            win.x = mouse_x - win.drag_offset_x;
+                            win.y = mouse_y - win.drag_offset_y;
+                        }
+                    }
                 }
-                InputEvent::MouseButton { button: MouseBtn::Left, pressed: true } => {
-                    let div = display.width as f32 - sidebar_width;
-                    if mouse_x >= div {
-                        focus = FocusPanel::Sidebar;
-                        let rel_x = mouse_x - div;
-                        let h = display.height as f32;
-                        if let Some(msg) = sidebar.on_settings_click(rel_x, mouse_y) {
-                            if let Some(tx) = &agent_tx { let _ = tx.send(msg); }
+                InputEvent::MouseButton { button: MouseBtn::Left, pressed } => {
+                    if pressed {
+                        // Priority routing (simplified for DRM)
+                        if sidebar.status == soma_common::AgentStatus::AwaitingApproval {
+                            if let Some(msg) = sidebar.on_approve() {
+                                send_msg(&agent_tx, msg);
+                            }
+                        } else if sidebar.expanded_msg_idx.is_some() {
+                            sidebar.expanded_msg_idx = None;
+                        } else if sidebar_visible && sidebar.slide_x < wf && mouse_x >= sidebar.slide_x {
+                            let rel_x = mouse_x - sidebar.slide_x;
+                            let rel_y = mouse_y - MENU_BAR_H;
+                            let sidebar_h = hf - MENU_BAR_H - DOCK_HEIGHT;
+                            if let Some(msg) = sidebar.on_settings_click(rel_x, rel_y) {
+                                send_msg(&agent_tx, msg);
+                            } else {
+                                sidebar.on_sidebar_click(rel_x, rel_y, sidebar_h);
+                            }
+                        } else if let Some(idx) = dock.hit_test(mouse_x, mouse_y, wf, hf) {
+                            if idx < dock.apps.len() {
+                                match &dock.apps[idx].action {
+                                    DockAction::OpenWindow(WindowContentType::Terminal) => {
+                                        // Open/focus terminal
+                                        if !windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Terminal)) {
+                                            let id = next_window_id; next_window_id += 1;
+                                            windows.push(FloatingWindow::new(id, WindowContent::Terminal, 80.0, MENU_BAR_H + 20.0));
+                                            for w in &mut windows { w.is_focused = false; }
+                                            windows.last_mut().unwrap().is_focused = true;
+                                        }
+                                    }
+                                    DockAction::OpenWindow(WindowContentType::Browser) => {
+                                        if !windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Browser)) {
+                                            let id = next_window_id; next_window_id += 1;
+                                            windows.push(FloatingWindow::new(id, WindowContent::Browser, 120.0, MENU_BAR_H + 40.0));
+                                            for w in &mut windows { w.is_focused = false; }
+                                            windows.last_mut().unwrap().is_focused = true;
+                                        }
+                                    }
+                                    DockAction::ToggleAgentMode => {
+                                        agent_mode = !agent_mode;
+                                        if agent_mode { activity_text = "Agent mode active".to_string(); }
+                                        else { activity_text.clear(); }
+                                    }
+                                    DockAction::ToggleSidebar => { sidebar_visible = !sidebar_visible; }
+                                    DockAction::TogglePrivateMode => {
+                                        private_mode = !private_mode;
+                                        send_msg(&agent_tx, CompositorMessage::PrivateModeChanged { active: private_mode });
+                                    }
+                                }
+                            }
+                        } else if mouse_y < MENU_BAR_H {
+                            // Menu bar — no-op
                         } else {
-                            sidebar.on_sidebar_click(rel_x, mouse_y, h);
+                            // Windows
+                            let mut clicked: Option<(WindowId, bool)> = None;
+                            for win in windows.iter().rev() {
+                                if win.is_minimized || !win.hit_frame(mouse_x, mouse_y) { continue; }
+                                if win.hit_close(mouse_x, mouse_y) {
+                                    clicked = Some((win.id, true)); break;
+                                }
+                                clicked = Some((win.id, false)); break;
+                            }
+                            if let Some((id, is_close)) = clicked {
+                                if is_close {
+                                    windows.retain(|w| w.id != id);
+                                    if let Some(top) = windows.last_mut() { top.is_focused = true; }
+                                } else {
+                                    for w in &mut windows { w.is_focused = false; }
+                                    if let Some(pos) = windows.iter().position(|w| w.id == id) {
+                                        let mut w = windows.remove(pos);
+                                        w.is_focused = true;
+                                        if w.hit_titlebar(mouse_x, mouse_y) {
+                                            w.drag_offset_x = mouse_x - w.x;
+                                            w.drag_offset_y = mouse_y - w.y;
+                                            dragging_window = Some(id);
+                                        }
+                                        windows.push(w);
+                                    }
+                                }
+                            }
                         }
                     } else {
-                        focus = FocusPanel::Terminal;
+                        dragging_window = None;
                     }
                 }
                 InputEvent::Scroll { delta_y } => {
-                    let div = display.width as f32 - sidebar_width;
-                    if mouse_x < div {
-                        match left_panel {
-                            LeftPanel::Terminal => terminal.scroll(delta_y),
-                            LeftPanel::Browser => browser_panel.scroll(delta_y),
-                        }
-                    } else {
+                    if sidebar_visible && mouse_x >= sidebar.slide_x {
                         sidebar.scroll(delta_y);
+                    } else {
+                        let ct = windows.iter().rev()
+                            .find(|w| w.hit_frame(mouse_x, mouse_y))
+                            .and_then(|w| w.content.content_type());
+                        match ct {
+                            Some(WindowContentType::Terminal) => terminal.scroll(delta_y),
+                            Some(WindowContentType::Browser) => browser_panel.scroll(delta_y),
+                            _ => {}
+                        }
                     }
                 }
                 _ => {}
@@ -875,22 +1210,22 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                             toasts.push(Toast { message: format!("Task done ({}/{})", ok, total), color, remaining: 3.5 });
                         }
                         soma_common::AgentMessage::Error { message, .. } => {
-                            toasts.push(Toast {
-                                message: format!("! {}", &message[..message.len().min(40)]),
-                                color: [248, 113, 113, 255],
-                                remaining: 3.5,
-                            });
+                            toasts.push(Toast { message: format!("! {}", &message[..message.len().min(40)]), color: [248, 113, 113, 255], remaining: 3.5 });
                         }
                         soma_common::AgentMessage::BrowserUpdate { url, title, screenshot_base64 } => {
                             browser_panel.update(url.clone(), title.clone(), screenshot_base64.as_deref());
-                            left_panel = LeftPanel::Browser;
                         }
                         soma_common::AgentMessage::ConfigUpdated { provider, model } => {
-                            toasts.push(Toast {
-                                message: format!("Model: {} / {}", provider, model),
-                                color: [99, 102, 241, 255],
-                                remaining: 3.5,
-                            });
+                            toasts.push(Toast { message: format!("Model: {} / {}", provider, model), color: [99, 102, 241, 255], remaining: 3.5 });
+                        }
+                        soma_common::AgentMessage::AgentModeStarted { task } => {
+                            agent_mode = true; activity_text = task.clone();
+                        }
+                        soma_common::AgentMessage::AgentModeEnded => {
+                            agent_mode = false; activity_text.clear();
+                        }
+                        soma_common::AgentMessage::ActivityUpdate { text } => {
+                            activity_text = text.clone();
                         }
                         _ => {}
                     }
@@ -906,49 +1241,81 @@ fn drm_main(runtime: tokio::runtime::Handle) {
             Some(p) => p,
             None => continue,
         };
-        pixmap.fill(tiny_skia::Color::from_rgba8(30, 30, 30, 255));
 
         sidebar.update(dt);
         terminal.update(dt);
         toasts.retain_mut(|t| { t.remaining -= dt; t.remaining > 0.0 });
 
+        // Update menubar clock
+        {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            menubar_clock = format!("{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60);
+        }
+
         if login.result != LoginResult::Granted {
             login.update(dt);
             login.render(&mut renderer, &mut pixmap);
         } else {
-            let wf = w as f32;
-            let hf = h as f32;
-            let div = wf - sidebar_width;
-
             terminal.poll();
-            if div > 10.0 {
-                match left_panel {
-                    LeftPanel::Terminal => {
-                        terminal.render(&mut renderer, &mut pixmap, 0.0, 0.0, div, hf);
-                    }
-                    LeftPanel::Browser => {
-                        browser_panel.render(&mut renderer, &mut pixmap, 0.0, 0.0, div, hf);
-                        renderer.draw_text(&mut pixmap, "F2=Terminal", 4.0, hf - 14.0, 80.0, 8.0, [255, 255, 255, 40]);
+
+            // Sync dock state
+            let has_terminal = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Terminal));
+            let has_browser = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Browser));
+            dock.sync_open_state(has_terminal, has_browser, agent_mode, sidebar_visible, private_mode);
+            dock.hovered_idx = dock.hit_test(mouse_x, mouse_y, wf, hf);
+
+            // Init sidebar slide
+            if sidebar.slide_x == f32::MAX {
+                sidebar.slide_x = wf;
+                sidebar.slide_target_x = wf;
+            }
+            let sidebar_w = sidebar::SIDEBAR_WIDTH;
+            sidebar.slide_target_x = if sidebar_visible { wf - sidebar_w } else { wf };
+
+            // 9-layer stack
+            desktop::render_desktop(&mut renderer, &mut pixmap, wf, hf);
+
+            for i in 0..windows.len() {
+                let win = &windows[i];
+                if win.is_minimized { continue; }
+                let hover_close = win.hit_close(mouse_x, mouse_y);
+                render_window_chrome(&mut renderer, &mut pixmap, win, hover_close);
+                let (cx, cy, cw, ch) = win.content_rect();
+                match &win.content {
+                    WindowContent::Terminal => terminal.render(&mut renderer, &mut pixmap, cx, cy, cw, ch),
+                    WindowContent::Browser => browser_panel.render(&mut renderer, &mut pixmap, cx, cy, cw, ch),
+                    WindowContent::DynamicApp(_) => {
+                        let win_ref = &windows[i];
+                        render_dynamic_app(&mut renderer, &mut pixmap, win_ref, mouse_x, mouse_y);
                     }
                 }
             }
-            sidebar.render(&mut renderer, &mut pixmap, div, 0.0, hf);
 
-            // Divider
-            renderer.fill_rect(&mut pixmap, div - 1.0, 0.0, 2.0, hf, [255, 255, 255, 15]);
+            if agent_mode {
+                let t = renderer.theme.clone();
+                renderer.fill_rect(&mut pixmap, 0.0, 0.0, wf, 2.0, t.agent_active);
+                renderer.fill_rect(&mut pixmap, 0.0, hf - 2.0, wf, 2.0, t.agent_active);
+                renderer.fill_rect(&mut pixmap, 0.0, 0.0, 2.0, hf, t.agent_active);
+                renderer.fill_rect(&mut pixmap, wf - 2.0, 0.0, 2.0, hf, t.agent_active);
+            }
 
-            // HITL overlay
+            let status = sidebar.status;
+            desktop::render_menu_bar(&mut renderer, &mut pixmap, wf, &status, &activity_text, private_mode, &menubar_clock);
+            dock::render_dock(&mut renderer, &mut pixmap, &dock, wf, hf);
+
+            if sidebar.slide_x < wf {
+                sidebar.render(&mut renderer, &mut pixmap, sidebar.slide_x, MENU_BAR_H, hf - MENU_BAR_H - DOCK_HEIGHT);
+            }
+
             if sidebar.status == soma_common::AgentStatus::AwaitingApproval {
                 sidebar.render_approval_overlay(&mut renderer, &mut pixmap, wf, hf);
             }
-
-            // Detail modal
             if sidebar.expanded_msg_idx.is_some() {
                 sidebar.render_expanded_msg(&mut renderer, &mut pixmap, wf, hf);
             }
 
-            // Toasts
-            let mut toast_y = 8.0_f32;
+            let mut toast_y = MENU_BAR_H + 8.0;
             for toast in &toasts {
                 let alpha = if toast.remaining < 0.5 { (toast.remaining / 0.5 * 255.0) as u8 } else { 255 };
                 let tw = 260.0_f32.min(wf - 20.0);
@@ -971,3 +1338,4 @@ fn drm_main(runtime: tokio::runtime::Handle) {
         }
     }
 }
+

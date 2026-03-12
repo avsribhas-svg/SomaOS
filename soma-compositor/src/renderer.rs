@@ -82,6 +82,7 @@ impl Renderer {
 
     /// Fill a rectangle with an RGBA color
     pub fn fill_rect(&self, pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
+        if w <= 0.0 || h <= 0.0 { return; }
         if let Some(rect) = Rect::from_xywh(x, y, w, h) {
             let mut paint = Paint::default();
             paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
@@ -104,6 +105,11 @@ impl Renderer {
         let mut paint = Paint::default();
         paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
         paint.anti_alias = true;
+
+        // Guard against degenerate dimensions that crash tiny-skia
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
 
         let r = radius.min(w / 2.0).min(h / 2.0);
 
@@ -156,6 +162,7 @@ impl Renderer {
         font_size: f32,
         color: [u8; 4],
     ) -> f32 {
+        if max_width <= 0.0 || font_size <= 0.0 { return 0.0; }
         let metrics = Metrics::new(font_size, font_size * 1.4);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
 

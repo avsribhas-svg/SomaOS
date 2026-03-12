@@ -3,6 +3,7 @@ use soma_common::{ActionSchema, CapabilityInfo, CapabilityResult, ParamSchema};
 use std::collections::HashMap;
 
 pub mod browser;
+pub mod desktop_agent;
 pub mod filesystem;
 pub mod meta;
 pub mod network;
@@ -47,6 +48,7 @@ impl CapabilityRegistry {
         registry.register(Box::new(browser::BrowserCapability));
         registry.register(Box::new(vision::VisionCapability));
         registry.register(Box::new(meta::MetaCapability));
+        registry.register(Box::new(desktop_agent::DesktopAgentCapability));
 
         // Load any user-proposed capabilities from ~/.soma/capabilities/
         registry.load_user_capabilities();
