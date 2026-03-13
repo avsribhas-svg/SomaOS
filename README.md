@@ -29,16 +29,16 @@
 
 ## Vision
 
-SomaOS is a purpose-built operating system that inverts the traditional computing paradigm: **the AI agent is the primary user of the system. Humans supervise through a structured approval interface.**
+SomaOS is a purpose-built operating system that inverts the traditional computing paradigm: **both the human and the AI agent are first-class users of the same desktop.** Not master and tool — co-inhabitants.
 
-Traditional operating systems were designed around how humans interact with machines — through file managers, menus, and graphical applications built for manual navigation. SomaOS is designed bottom-up for how AI agents create and execute tasks. Every workflow, every interface primitive, and every application is architected to be agent-inspectable and agent-drivable by default.
+Traditional operating systems treat AI as a tool the human invokes. SomaOS treats AI as a peer operator that shares the same environment but uses a different interface modality. The human interacts through pixels — clicking, typing, dragging. The agent interacts through structured APIs — reading app state, writing data, executing actions. Same apps, same windows, same desktop. Two doors into one room.
 
-This is a precedent system for future automation infrastructure. Instead of using programming as the medium to understand and control a machine, SomaOS uses AI agents as the native execution layer — with humans as supervisors, not operators.
+The HITL (Human-in-the-Loop) approval system is the conflict resolution primitive for this shared space: when the agent wants to do something that affects the human's context, it asks first.
 
 **The long-term stack:**
-- **Native Rust applications** (soma-sheets, soma-docs, soma-media, soma-canvas) where every piece of state is directly readable and writable by the agent via a shared `AgentAPI` trait
+- **Dual-interface native apps** (soma-sheets, soma-docs, soma-media) — every app is both a good GUI for the human *and* a structured `AgentAPI` for the agent. Humans edit cells; the agent writes formulas. Same data model, two interfaces.
 - **Embedded browser** (WebKitGTK offscreen) for web-shaped apps and existing web tooling, driven by the agent via DOM/JS bridge
-- **Structured perception** — agents read app state directly; fall back to vision model (multimodal LLM) for unknown UIs
+- **Structured perception** — agents read app state directly via `AgentAPI`; fall back to vision model (multimodal LLM) for unknown UIs
 - **Federation** — each SomaOS node is autonomous; nodes can delegate tasks to each other over network IPC
 
 ---
