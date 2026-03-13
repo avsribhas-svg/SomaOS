@@ -64,88 +64,77 @@
 - `BrowserUpdate { url, title, screenshot_base64 }` IPC message; compositor auto-switches to browser panel on navigation
 - Capabilities grow to 35 built-in actions (+4 browser, +1 vision)
 
+### v1.0 — Desktop Environment + Desktop Agent Mode
+- Full floating-window desktop: dock, menu bar, agent mode, private mode, dynamic app spawning
+- Desktop agent mode: AI takes control via `DesktopAction` IPC, `AgentModeStarted`/`AgentModeEnded`
+- Dynamic app spawning: `SpawnApp` with JSON widget trees (Label, Button, ProgressBar, TextDisplay)
+- Workflow learning: `DesktopObserver`, workflow annotation, persistence to `~/.soma/workflows.json`
+- Private mode: `Cmd+Shift+P` / F5, observation pauses, `[pvt]` indicator
+- Multi-provider LLM brain: native tool calling across Ollama, Anthropic, OpenAI, Gemini
+- 36 built-in capability actions across 10 modules (filesystem, process, system, network, package, browser, vision, meta, desktop_agent, + user-defined)
+
 ---
 
 ## Planned
 
-### v1.0 — Desktop Environment + Desktop Agent Mode *(in progress)*
+### v1.0.1 — Compositor Extraction + Typed Failure
 
-This version transforms SomaOS from a fixed terminal+sidebar split into a full macOS-style desktop where the AI operates as a native user — not an external tool bolted on. The human supervises from the same environment.
+`main.rs` is ~1,340 lines owning the event loop, render stack, input dispatch, and IPC polling. Extract before adding AgentAPI plumbing:
+- `event_handler.rs` — keyboard/mouse/scroll input handling
+- `compositor.rs` — 9-layer render stack + animation/state sync
+- `main.rs` shrinks to ~300 lines: struct, helpers, thin event loops
 
-**Desktop Environment**
-- Floating window manager: Terminal, Browser, and agent-spawned `DynamicApp` windows with drag, focus, and close
-- macOS-style dock at the bottom: app launchers (Terminal, Browser, AI Agent, Sidebar, Private), open-state indicator dots, hover highlights, agent-mode glow ring
-- Menu bar (28px): "Soma" label · live activity strip (agent status dot + task text) · private-mode lock · clock
-- Desktop wallpaper (two-tone dark gradient)
-- AI sidebar becomes a slide-in overlay (800px/s tween animation), not a fixed panel — toggled via dock or Cmd+Space
-- Terminal and Browser are applications, not panels — agents and humans use the same floating-window primitives
+**Agent-native primitive: Typed Failure**
+- Replace string errors in `CapabilityResult` with structured `CapabilityError { reason, context, alternatives }`
+- Agent can programmatically reason about recovery: retry with different params, escalate via HITL, or try an alternative
+- Quick win — no architectural change, just update `CapabilityResult` in soma-common and each capability's error returns
 
-**Desktop Agent Mode**
-- Agent can take full control of the desktop: open/close/focus windows, type text, click coordinates, navigate the browser — via `DesktopAction` IPC messages
-- Agent signals entry/exit: `AgentModeStarted { task }` → dock AI icon glows blue, menu bar shows live task text; `AgentModeEnded` → all indicators clear
-- `desktop_agent` capability: `start_agent_mode`, `end_agent_mode`, `spawn_app`, `desktop_action`, `get_workflow_history`
-- HITL gate continues to apply — dangerous actions surface an approval modal mid-agent-session
+### v1.1 — AgentAPI + soma-sheets + Session Model ← THESIS MILESTONE
 
-**Dynamic App Spawning**
-- Agent can spawn new application windows at runtime without any Rust rebuild: `SpawnApp { title, app_id, widgets_json }`
-- `DynamicApp` windows contain a declarative widget tree (Label, Button, ProgressBar, TextDisplay) serialised as JSON over IPC
-- Agent-owned windows display a teal "AI" badge in their title bar
-- `UpdateAppWidget` IPC allows the agent to patch widget state (e.g. update a progress bar, swap text) while the window is open
-- Apps can be promoted to persistent definitions saved at `~/.soma/apps/<app_id>.json`
+This is where SomaOS becomes a different computing paradigm. Both the human and the AI are first-class users of the same desktop — apps must be **dual-interface**: a good GUI for the human *and* a structured API for the agent.
 
-**Workflow Learning**
-- `DesktopObserver`: passive observation of window focus, open, close, and text-input events — never records actual text content, only context and char counts
-- Observation automatically pauses in private mode (`PrivateModeChanged { active: true }`)
-- Human or agent can annotate a sequence of events as a named workflow (`AnnotateWorkflow { name }`) — stored at `~/.soma/workflows.json`
-- "Save as workflow" link appears below plan cards and execution-complete cards in the sidebar
-- `get_workflow_history` capability returns structured workflow patterns to the agent for reasoning about automation opportunities
-
-**Private Mode**
-- Cmd+Shift+P (macOS dev) / F5 (DRM bare metal) toggles private mode
-- Menu bar shows `[pvt]` indicator and a slightly dimmed bar tint
-- `PrivateModeChanged` sent to agent → observer deactivates → no events recorded
-- Agent still responds to explicit prompts; it just doesn't learn from the session
-
-**New IPC messages**
-- Compositor → Agent: `DesktopEvent`, `AnnotateWorkflow`, `PrivateModeChanged`, `DynamicAppAction`
-- Agent → Compositor: `AgentModeStarted`, `AgentModeEnded`, `SpawnApp`, `UpdateAppWidget`, `DesktopAction`, `ActivityUpdate`
-
-**New Keyboard Shortcuts**
-
-| Action | macOS dev | DRM bare metal |
-|--------|-----------|----------------|
-| Toggle AI sidebar | Cmd+Space | F3 |
-| Open Terminal | Cmd+T | F1 |
-| Close window | Cmd+W | F2 |
-| Enter/exit agent mode | Cmd+Shift+A | F4 |
-| Toggle private mode | Cmd+Shift+P | F5 |
-
-**New Compositor Modules**
-- `window_manager.rs` — `FloatingWindow`, `WindowContent`, `AppDef`, `Widget`, chrome rendering, dynamic app rendering
-- `dock.rs` — `Dock`, `DockApp`, `DockAction`, pill geometry, hit testing, sync state, rendering
-- `desktop.rs` — wallpaper rendering, menu bar rendering
-- `soma-agent/src/observer.rs` — `DesktopObserver`, `WorkflowPattern`, `DesktopEvent`, persistence
-- `soma-agent/src/capabilities/desktop_agent.rs` — agent desktop control capability
-
-### v1.0.5 — AgentAPI + Native App Framework
+**AgentAPI**
 - `AgentAPI` trait in soma-common: `describe_state`, `execute_action`, `subscribe_changes`
-- `soma-sheets`: spreadsheet with full agent read/write API (cells, formulas, ranges)
-- `soma-docs`: document editor with structured agent API (paragraphs, headings, tables)
-- Apps register with the compositor via `AgentAPI`; agent reads and writes app state directly — no screen-scraping
+- `WindowContent::NativeApp` variant wrapping `Box<dyn AgentAPI>` in the compositor
+- New IPC: `AppStateQuery`, `AppAction`, `AppStateChanged`
 
-### v1.1 — Capability Registry Governance
-- Hot-reload: agent reloads user-defined capabilities without a full restart
-- Registry UI: compositor panel showing all capabilities (built-in + user-defined), with enable/disable and delete
-- Gap detection during task execution: when a step fails due to a missing capability, agent automatically proposes a fix and surfaces it for HITL review
-- Capability promotion: convert a stable JSON-defined capability into a built-in Rust capability via scaffolded code generation
-- Version tracking: each capability definition carries a version field; updates require fresh HITL approval
+**soma-sheets (first dual-interface app)**
+- **Human**: click cells, type values, Tab/Enter navigation, formula bar — standard spreadsheet UX
+- **Agent**: `read_range`, `write_cell`, `apply_formula` via structured `AgentAPI` — no screen-scraping
+- Both share the same data model; edits from either side are immediately visible to the other
+- Agent capability: `sheets` with actions mapped to `AgentAPI::execute_action`
 
-### v1.2 — Media + Generation
+**Agent-native primitive: Session Model**
+- Agent sessions become first-class OS objects: intent, scope, history, affected resources
+- `AgentModeStarted { task }` extended with scope (capability whitelist, directory whitelist)
+- Session history persists beyond the 5-exchange conversation window
+- Human can inspect any active session from the sidebar
+
+### v1.2 — soma-docs + Capability Governance + Semantic FS
+
+Once AgentAPI exists and soma-sheets proves the dual-interface pattern:
+- `soma-docs`: document editor (paragraphs, headings, tables, code blocks) — same dual-interface pattern
+- Capability governance: hot-reload, registry UI, gap detection, capability promotion, version tracking
+
+**Agent-native primitive: Semantic File System Layer**
+- Lightweight metadata per file: what created it, what workflows touched it, agent-generated tags/descriptions
+- Agent navigates by intent ("the spreadsheet I was working on") rather than path
+- Implementation: either `.soma-meta` sidecars (portable) or `~/.soma/index.db` (queryable) — TBD
+- New capability: `semantic_fs` with `describe_file`, `find_by_intent`, `tag`, `get_history`
+
+### v1.3 — Media + Generation + Parallel Task Contexts
 - `soma-media`: image/video generation pipeline (local diffusion)
-- Media result cards in sidebar (video playback, image gallery)
+- Media as `AgentAPI` apps with structured state, not just chat cards
 - Agent capabilities: `generate_image`, `generate_video`, `generate_audio`
 
-### v1.3 — Federation
+**Agent-native primitive: Parallel Task Contexts**
+- Multiple concurrent agent sessions with isolated capability scopes
+- Human can see and interrupt any session from the dock/sidebar
+- Sessions share data through the semantic FS layer
+- HITL queue aggregates approvals from all active sessions
+- IPC protocol extended with session IDs and scope tokens
+
+### v1.4 — Federation
 - Network IPC: TCP/TLS transport over the existing JSON socket protocol
 - Node registry: agents discover peers via config or DNS-SD
 - `delegate` capability: orchestrator sends tasks to remote nodes, streams results back
@@ -157,3 +146,5 @@ This version transforms SomaOS from a fixed terminal+sidebar split into a full m
 - Plugin API: third-party capabilities as shared Rust dylibs or WASM modules
 - Seccomp + AppArmor sandboxing per capability
 - OTA update system (delta images, signed, agent-driven)
+
+
