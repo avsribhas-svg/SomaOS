@@ -32,7 +32,7 @@ Both the human and the AI are **first-class co-inhabitants of the same desktop**
 ### Agent Layer (agent's interface)
 | Component | Status | Notes |
 |---|---|---|
-| Capability registry | ✅ | 36 built-in actions, 10 modules + user-defined JSON capabilities |
+| Capability registry | ✅ | 43 built-in actions, 9 modules + user-defined JSON capabilities |
 | LLM brain | ✅ | Native tool calling: Ollama, Anthropic, OpenAI, Gemini via `LlmProvider` trait |
 | Self-improvement loop | ✅ | `meta.propose` → HITL → `ScriptCapability` → hot-load |
 | Desktop agent mode | ✅ | `AgentModeStarted`/`Ended`, `DesktopAction`, `SpawnApp`, `ActivityUpdate` |
@@ -111,7 +111,7 @@ Agent can then navigate by intent ("the spreadsheet I was working on yesterday")
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| `main.rs` complexity (1,342 lines) | **High** | v1.0.1 extraction into event_handler.rs + compositor.rs |
+| `main.rs` complexity (1,341 lines) | **High** | v1.0.1 extraction into event_handler.rs + compositor.rs |
 | DynamicApp widget tree growing into a UI framework | Medium | Keep minimal: status surfaces for agent, not apps for humans |
 | AgentAPI `describe_state` design | **High** | Prototype with soma-sheets first; the answer shapes all future apps |
 | Concurrency: human + agent editing same data model | **High** | Design conflict resolution in v1.1 (cell-level locking? last-write-wins? operational transform?) |
@@ -125,8 +125,8 @@ Agent can then navigate by intent ("the spreadsheet I was working on yesterday")
 | Metric | Value | Assessment |
 |---|---|---|
 | Total workspace crates | 4 | Good separation |
-| soma-compositor/src/main.rs | 1,342 lines | ⚠️ Needs extraction (v1.0.1) |
-| soma-agent capabilities | 10 modules, 36 actions | Healthy |
+| soma-compositor/src/main.rs | 1,341 lines | ⚠️ Needs extraction (v1.0.1) |
+| soma-agent capabilities | 9 modules, 43 actions | Healthy |
 | IPC message variants | 13 compositor→agent, 13 agent→compositor | Clean protocol |
 | Feature-gated backends | 2 (winit, drm) | Good architecture |
 | Test coverage | 0% | ⚠️ No tests at all |

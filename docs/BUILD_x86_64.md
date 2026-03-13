@@ -163,7 +163,11 @@ Press `Right Ctrl + F1` to return to the compositor.
 
 | Key | Action |
 |-----|--------|
-| `F1` | Toggle focus: terminal ↔ sidebar |
+| `F1` | Open / focus Terminal |
+| `F2` | Close focused window |
+| `F3` | Toggle AI sidebar |
+| `F4` | Toggle desktop agent mode |
+| `F5` | Toggle private mode (pauses workflow observation) |
 | `Enter` | Submit command (sidebar) / confirm (terminal) |
 | `Escape` | Reject pending HITL approval |
 | `Tab` | Shell completion (terminal) / switch to terminal (sidebar) |

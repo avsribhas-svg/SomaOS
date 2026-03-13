@@ -194,7 +194,11 @@ Once the download finishes you'll see a success toast in the compositor.
 
 | Key | Action |
 |-----|--------|
-| `F1` | Toggle focus between terminal (left) and sidebar (right) |
+| `F1` | Open / focus Terminal |
+| `F2` | Close focused window |
+| `F3` | Toggle AI sidebar |
+| `F4` | Toggle desktop agent mode |
+| `F5` | Toggle private mode (pauses workflow observation) |
 | `Enter` | Submit command (sidebar) / confirm shell input (terminal) |
 | `Escape` | Reject a pending HITL approval |
 | `Tab` | Shell completion (terminal) / switch to terminal (sidebar) |
