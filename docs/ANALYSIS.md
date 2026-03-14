@@ -32,7 +32,7 @@ Both the human and the AI are **first-class co-inhabitants of the same desktop**
 ### Agent Layer (agent's interface)
 | Component | Status | Notes |
 |---|---|---|
-| Capability registry | ✅ | 43 built-in actions, 9 modules + user-defined JSON capabilities |
+| Capability registry | ✅ | 13 modules (filesystem, process, system, network, package, browser, vision, meta, script, desktop_agent, docs, semantic_fs, sheets) + user-defined JSON |
 | LLM brain | ✅ | Native tool calling: Ollama, Anthropic, OpenAI, Gemini via `LlmProvider` trait |
 | Self-improvement loop | ✅ | `meta.propose` → HITL → `ScriptCapability` → hot-load |
 | Desktop agent mode | ✅ | `AgentModeStarted`/`Ended`, `DesktopAction`, `SpawnApp`, `ActivityUpdate` |
@@ -111,7 +111,7 @@ Agent can then navigate by intent ("the spreadsheet I was working on yesterday")
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| `main.rs` complexity (1,341 lines) | **High** | v1.0.1 extraction into event_handler.rs + compositor.rs |
+| ~~`main.rs` complexity (1,342 lines)~~ | ~~**High**~~ | ✅ Resolved v1.0.1 — extracted to compositor.rs + event_handler.rs; main.rs is ~712 lines |
 | DynamicApp widget tree growing into a UI framework | Medium | Keep minimal: status surfaces for agent, not apps for humans |
 | AgentAPI `describe_state` design | **High** | Prototype with soma-sheets first; the answer shapes all future apps |
 | Concurrency: human + agent editing same data model | **High** | Design conflict resolution in v1.1 (cell-level locking? last-write-wins? operational transform?) |
@@ -125,8 +125,8 @@ Agent can then navigate by intent ("the spreadsheet I was working on yesterday")
 | Metric | Value | Assessment |
 |---|---|---|
 | Total workspace crates | 4 | Good separation |
-| soma-compositor/src/main.rs | 1,341 lines | ⚠️ Needs extraction (v1.0.1) |
-| soma-agent capabilities | 9 modules, 43 actions | Healthy |
+| soma-compositor/src/main.rs | ~712 lines | ✅ Extracted (v1.0.1) |
+| soma-agent capabilities | 13 modules | Healthy |
 | IPC message variants | 13 compositor→agent, 13 agent→compositor | Clean protocol |
 | Feature-gated backends | 2 (winit, drm) | Good architecture |
 | Test coverage | 0% | ⚠️ No tests at all |

@@ -1,5 +1,5 @@
 use serde_json::Value;
-use soma_common::{ActionSchema, CapabilityInfo, CapabilityResult, ParamSchema};
+use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityInfo, CapabilityResult, ParamSchema};
 use std::collections::HashMap;
 
 pub mod browser;
@@ -89,7 +89,7 @@ impl CapabilityRegistry {
             None => CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unknown capability: {}", capability)),
+                error: Some(CapabilityError::new(ErrorReason::UnknownCapability, format!("Unknown capability: {}", capability))),
             },
         }
     }

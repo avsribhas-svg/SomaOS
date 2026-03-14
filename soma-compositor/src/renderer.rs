@@ -1,5 +1,5 @@
 use cosmic_text::{Attrs, Buffer, Color, FontSystem, Metrics, Shaping, SwashCache};
-use tiny_skia::{Paint, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{Paint, PathBuilder, Pixmap, Rect, Transform, LinearGradient, GradientStop, Point, SpreadMode, BlendMode, Shader};
 
 /// Color palette for the compositor UI
 #[derive(Clone)]
@@ -34,32 +34,32 @@ pub struct Theme {
 impl Theme {
     pub fn dark() -> Self {
         Self {
-            // VS Code / IDE agent-style dark theme
-            bg_primary:     [30,  30,  30,  255], // #1E1E1E editor bg
-            bg_sidebar:     [37,  37,  38,  255], // #252526 panel bg
-            bg_surface:     [45,  45,  48,  240], // #2D2D30 card surface
-            bg_input:       [58,  58,  58,  235], // #3A3A3A input bg
-            bg_hover:       [255, 255, 255,  10],
-            text_primary:   [212, 212, 212, 255], // #D4D4D4 VS Code text
-            text_secondary: [150, 150, 150, 255], // #969696 secondary
-            text_muted:     [96,  96,  96,  255], // #606060 muted
-            accent:         [0,   122, 204, 255], // #007ACC VS Code blue
-            success:        [78,  201, 176, 255], // #4EC9B0 teal/green
-            warning:        [220, 220, 100, 255], // #DCDC64 yellow
-            error:          [244, 135, 113, 255], // #F48771 error
-            border:         [255, 255, 255,  18], // subtle separator
-            terminal_bg:    [22,  22,  22,  255],
-            terminal_text:  [204, 204, 204, 255],
+            // Modern premium glass dark theme
+            bg_primary:     [18,  18,  20,  255], // Deep charcoal
+            bg_sidebar:     [22,  22,  26,  235], // Translucent sidebar
+            bg_surface:     [35,  35,  40,  240], // Glassy card surface
+            bg_input:       [45,  45,  52,  240],
+            bg_hover:       [255, 255, 255,  15],
+            text_primary:   [240, 240, 245, 255], // Crisp white text
+            text_secondary: [160, 160, 168, 255], // Sleeker secondary
+            text_muted:     [110, 110, 115, 255],
+            accent:         [120, 130, 255, 255], // Vibrant periwinkle accent
+            success:        [64,  224, 180, 255], // Mint green
+            warning:        [255, 210,  90, 255], // Crisp yellow
+            error:          [255, 105, 105, 255], // Soft vibrant red
+            border:         [255, 255, 255,  24], // Slightly higher contrast border
+            terminal_bg:    [12,  12,  14,  245], // Deep terminal background
+            terminal_text:  [220, 220, 225, 255],
             // Desktop chrome
-            bg_desktop:         [18,  22,  30,  255],
-            bg_window_chrome:   [45,  47,  52,  255],
-            bg_window_inactive: [38,  40,  44,  255],
-            bg_titlebar:        [40,  42,  48,  255],
-            bg_dock:            [30,  32,  40,  220],
-            bg_menubar:         [20,  20,  26,  230],
-            close_btn:          [200, 70,  60,  255],
-            close_btn_hover:    [255, 95,  86,  255],
-            agent_active:       [0,   180, 255, 255],
+            bg_desktop:         [10,  12,  20,  255], // Base color
+            bg_window_chrome:   [28,  28,  34,  245], // Glassy window body
+            bg_window_inactive: [22,  22,  28,  245],
+            bg_titlebar:        [36,  36,  42,  250], // Slightly lighter titlebar
+            bg_dock:            [18,  18,  24,  180], // High-glass dock
+            bg_menubar:         [12,  12,  16,  190], // High-glass menu bar
+            close_btn:          [255, 95,  86,  255], // macOS standard red
+            close_btn_hover:    [255, 125, 115, 255],
+            agent_active:       [120, 130, 255, 255], // Glowing accent border
         }
     }
 }
@@ -82,12 +82,49 @@ impl Renderer {
 
     /// Fill a rectangle with an RGBA color
     pub fn fill_rect(&self, pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
+        let x = x.round();
+        let y = y.round();
+        let w = w.abs().round();
+        let h = h.abs().round();
+        if w < 1.0 || h < 1.0 || w.is_nan() || h.is_nan() || !w.is_finite() || !h.is_finite() { 
+            return; 
+        }
+        if let Some(rect) = Rect::from_xywh(x, y, w, h) {
+            let mut paint = Paint::default();
+            paint.blend_mode = BlendMode::SourceOver; // Use source over for translucency
+            paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
+            paint.anti_alias = false; // Snap strictly to pixels to avoid clip bugs
+            pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+        }
+    }
+
+    /// Fill a rectangle with a linear gradient
+    pub fn fill_gradient(
+        &self,
+        pixmap: &mut Pixmap,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        start_point: Point,
+        end_point: Point,
+        stops: Vec<GradientStop>,
+    ) {
         if w <= 0.0 || h <= 0.0 { return; }
         if let Some(rect) = Rect::from_xywh(x, y, w, h) {
             let mut paint = Paint::default();
-            paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
-            paint.anti_alias = true;
-            pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+            if let Some(shader) = LinearGradient::new(
+                start_point,
+                end_point,
+                stops,
+                SpreadMode::Pad,
+                Transform::identity()
+            ) {
+                paint.shader = shader;
+                paint.anti_alias = true;
+                paint.blend_mode = BlendMode::SourceOver;
+                pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+            }
         }
     }
 
@@ -102,16 +139,22 @@ impl Renderer {
         radius: f32,
         color: [u8; 4],
     ) {
+        let x = x.round();
+        let y = y.round();
+        let w = w.abs().round();
+        let h = h.abs().round();
+        
         let mut paint = Paint::default();
         paint.set_color_rgba8(color[0], color[1], color[2], color[3]);
-        paint.anti_alias = true;
+        paint.anti_alias = true; // Essential for rounded corners
 
         // Guard against degenerate dimensions that crash tiny-skia
-        if w <= 0.0 || h <= 0.0 {
+        if w < 1.0 || h < 1.0 || w.is_nan() || h.is_nan() || !w.is_finite() || !h.is_finite() {
             return;
         }
 
-        let r = radius.min(w / 2.0).min(h / 2.0);
+        // Strictly clamp radius to half width/height to avoid degenerate paths
+        let r = radius.abs().clamp(0.0, (w / 2.0).min(h / 2.0));
 
         let mut pb = PathBuilder::new();
         // Top-left corner
@@ -141,6 +184,13 @@ impl Renderer {
 
     /// Draw a 1px border around a rectangle
     pub fn stroke_rect(&self, pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
+        let x = x.round();
+        let y = y.round();
+        let w = w.abs().round();
+        let h = h.abs().round();
+        if w < 1.0 || h < 1.0 || w.is_nan() || h.is_nan() || !w.is_finite() || !h.is_finite() { 
+            return; 
+        }
         // Top
         self.fill_rect(pixmap, x, y, w, 1.0, color);
         // Bottom
@@ -162,7 +212,9 @@ impl Renderer {
         font_size: f32,
         color: [u8; 4],
     ) -> f32 {
-        if max_width <= 0.0 || font_size <= 0.0 { return 0.0; }
+        if max_width <= 0.0 || font_size <= 0.0 || max_width.is_nan() || !max_width.is_finite() { 
+            return 0.0; 
+        }
         let metrics = Metrics::new(font_size, font_size * 1.4);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
 

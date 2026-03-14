@@ -11,7 +11,7 @@
 //! human's role shifts from writing capabilities to curating them.
 
 use serde_json::Value;
-use soma_common::{ActionSchema, CapabilityResult};
+use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult};
 
 use super::{param, script::ScriptCapabilityDef, Capability};
 
@@ -60,7 +60,7 @@ impl Capability for MetaCapability {
             _ => CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unknown meta action: {}", action)),
+                error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown meta action: {}", action))),
             },
         }
     }
@@ -81,7 +81,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("'name' is required".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "'name' is required")),
             }
         }
     };
@@ -92,7 +92,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("'description' is required".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "'description' is required")),
             }
         }
     };
@@ -104,7 +104,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
         return CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some("'actions' must be a JSON array".to_string()),
+            error: Some(CapabilityError::new(ErrorReason::InvalidParam, "'actions' must be a JSON array")),
         };
     }
 
@@ -121,7 +121,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Invalid capability definition: {}", e)),
+                error: Some(CapabilityError::new(ErrorReason::InvalidParam, format!("Invalid capability definition: {}", e))),
             }
         }
     };
@@ -131,7 +131,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
         return CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("Could not create capabilities directory: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Could not create capabilities directory: {}", e))),
         };
     }
 
@@ -142,7 +142,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Serialization error: {}", e)),
+                error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Serialization error: {}", e))),
             }
         }
     };
@@ -169,7 +169,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
         Err(e) => CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("Failed to save capability definition: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Failed to save capability definition: {}", e))),
         },
     }
 }
@@ -216,7 +216,7 @@ fn execute_describe_gap(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("'gap' is required".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "'gap' is required")),
             }
         }
     };
@@ -249,7 +249,7 @@ fn execute_describe_gap(params: &Value) -> CapabilityResult {
         Err(e) => CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("Failed to write gap log: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Failed to write gap log: {}", e))),
         },
     }
 }

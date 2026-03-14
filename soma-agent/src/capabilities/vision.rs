@@ -1,7 +1,7 @@
 use crate::capabilities::{param, Capability};
 use base64::Engine;
 use serde_json::{json, Value};
-use soma_common::{ActionSchema, CapabilityResult};
+use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult};
 use std::fs;
 
 /// Vision capability — analyzes images using Ollama's multimodal model (qwen2.5-vl).
@@ -46,7 +46,7 @@ impl Capability for VisionCapability {
             _ => CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unknown vision action: {}", action)),
+                error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown vision action: {}", action))),
             },
         }
     }
@@ -68,7 +68,7 @@ impl VisionCapability {
                     return CapabilityResult {
                         success: false,
                         data: Value::Null,
-                        error: Some(format!("Cannot read image '{}': {}", path, e)),
+                        error: Some(CapabilityError::new(ErrorReason::NotFound, format!("Cannot read image '{}': {}", path, e))),
                     }
                 }
             }
@@ -76,7 +76,7 @@ impl VisionCapability {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("Must provide 'path' or 'base64'".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "Must provide 'path' or 'base64'")),
             };
         };
 
@@ -123,7 +123,7 @@ impl VisionCapability {
             Err(e) => CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Vision model request failed: {}", e)),
+                error: Some(CapabilityError::new(ErrorReason::NetworkError, format!("Vision model request failed: {}", e))),
             },
         }
     }

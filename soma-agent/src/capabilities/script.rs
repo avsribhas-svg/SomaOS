@@ -26,7 +26,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use soma_common::{ActionSchema, CapabilityResult, ParamSchema};
+use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult, ParamSchema};
 use std::process::Command;
 
 use super::Capability;
@@ -95,7 +95,7 @@ impl Capability for ScriptCapability {
                 return CapabilityResult {
                     success: false,
                     data: Value::Null,
-                    error: Some(format!("Unknown action '{}' in capability '{}'", action, self.def.name)),
+                    error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown action '{}' in capability '{}'", action, self.def.name))),
                 }
             }
         };
@@ -129,14 +129,14 @@ impl Capability for ScriptCapability {
                     CapabilityResult {
                         success: false,
                         data: Value::Null,
-                        error: Some(if stderr.is_empty() { stdout } else { stderr }),
+                        error: Some(CapabilityError::new(ErrorReason::CommandFailed, if stderr.is_empty() { stdout } else { stderr })),
                     }
                 }
             }
             Err(e) => CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Failed to execute command: {}", e)),
+                error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to execute command: {}", e))),
             },
         }
     }

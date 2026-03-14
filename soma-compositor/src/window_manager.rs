@@ -83,6 +83,7 @@ pub enum WindowContent {
     Terminal,
     Browser,
     DynamicApp(AppDef),
+    Settings(crate::settings_app::SettingsApp),
 }
 
 /// Subset tag for use in Dock (no heap data).
@@ -90,6 +91,7 @@ pub enum WindowContent {
 pub enum WindowContentType {
     Terminal,
     Browser,
+    Settings,
 }
 
 impl WindowContent {
@@ -98,6 +100,7 @@ impl WindowContent {
             WindowContent::Terminal => Some(WindowContentType::Terminal),
             WindowContent::Browser  => Some(WindowContentType::Browser),
             WindowContent::DynamicApp(_) => None,
+            WindowContent::Settings(_) => Some(WindowContentType::Settings),
         }
     }
 }
@@ -134,6 +137,7 @@ impl FloatingWindow {
             WindowContent::Terminal      => ("Terminal".to_string(), 780.0, 480.0),
             WindowContent::Browser       => ("Browser".to_string(),  960.0, 620.0),
             WindowContent::DynamicApp(d) => (d.app_id.clone(),       480.0, 360.0),
+            WindowContent::Settings(_)   => ("System Settings".to_string(), 380.0, 420.0),
         };
         let agent_owned = matches!(content, WindowContent::DynamicApp(_));
         Self {
@@ -196,23 +200,29 @@ pub fn render_window_chrome(
 ) {
     let t = renderer.theme.clone();
 
-    // Shadow — slightly offset large rounded rect at low alpha
-    renderer.fill_rounded_rect(pixmap, win.x + 4.0, win.y + 6.0, win.width, win.height, 12.0,
-        [0, 0, 0, 55]);
+    // Multi-layer shadow for depth
+    renderer.fill_rounded_rect(pixmap, win.x + 8.0, win.y + 16.0, win.width, win.height, 16.0, [0, 0, 0, 40]);
+    renderer.fill_rounded_rect(pixmap, win.x + 2.0, win.y + 4.0, win.width, win.height, 12.0, [0, 0, 0, 70]);
 
-    // Window body
+    // Outer border (highlight) — crisp neon ring for focused, subtle glass rim for unfocused
+    let border_color = if win.is_focused { t.accent } else { [255, 255, 255, 20] };
+    renderer.fill_rounded_rect(pixmap, win.x - 1.0, win.y - 1.0, win.width + 2.0, win.height + 2.0, 11.0, border_color);
+
+    // Window body (glassy translucent)
     let body_bg = if win.is_focused { t.bg_window_chrome } else { t.bg_window_inactive };
     renderer.fill_rounded_rect(pixmap, win.x, win.y, win.width, win.height, 10.0, body_bg);
 
-    // Title bar (top strip, same radius — bottom is flush with body)
-    let tb_bg = if win.is_focused { t.bg_titlebar } else { [34, 36, 40, 255] };
-    renderer.fill_rounded_rect(pixmap, win.x, win.y, win.width, FloatingWindow::TITLE_BAR_H + 10.0, 10.0, tb_bg);
-    // Mask bottom corners of title bar (draw body colour over the lower rounded corners)
-    renderer.fill_rect(pixmap, win.x, win.y + FloatingWindow::TITLE_BAR_H - 2.0, win.width, 12.0, body_bg);
-    // Bottom border of title bar
-    renderer.fill_rect(pixmap, win.x, win.y + FloatingWindow::TITLE_BAR_H - 1.0, win.width, 1.0, t.border);
+    // Title bar
+    let tb_bg = if win.is_focused { t.bg_titlebar } else { [28, 28, 34, 250] };
+    renderer.fill_rounded_rect(pixmap, win.x, win.y, win.width, FloatingWindow::TITLE_BAR_H + 8.0, 10.0, tb_bg);
+    
+    // Mask bottom corners of title bar so they are flush with the body
+    renderer.fill_rect(pixmap, win.x, win.y + FloatingWindow::TITLE_BAR_H, win.width, 8.0, body_bg);
+    
+    // Crisp hairline separator below title bar
+    renderer.fill_rect(pixmap, win.x, win.y + FloatingWindow::TITLE_BAR_H, win.width, 1.0, [255, 255, 255, 15]);
 
-    // Close button (traffic-light circle)
+    // Close button (traffic-light red circle)
     let close_color = if is_hover_close { t.close_btn_hover } else { t.close_btn };
     renderer.fill_rounded_rect(pixmap,
         win.x + FloatingWindow::CLOSE_BTN_X - FloatingWindow::CLOSE_BTN_R,
@@ -223,18 +233,18 @@ pub fn render_window_chrome(
         close_color,
     );
 
-    // Title text — centered in title bar
+    // Title text — centered in title bar, bright white if focused
     let title_w = win.title.len() as f32 * 6.5;
     let title_x = win.x + (win.width - title_w) / 2.0;
-    let title_color = if win.is_focused { t.text_secondary } else { t.text_muted };
+    let title_color = if win.is_focused { t.text_primary } else { t.text_muted };
     renderer.draw_text(pixmap, &win.title, title_x, win.y + 8.0, title_w + 8.0, 10.0, title_color);
 
-    // "AI" ownership badge — small teal pill, top-right
+    // "AI" ownership badge — vibrant neon teal pill, top-right
     if win.agent_owned {
-        let badge_x = win.x + win.width - 30.0;
-        let badge_y = win.y + 7.0;
-        renderer.fill_rounded_rect(pixmap, badge_x, badge_y, 22.0, 14.0, 4.0, t.success);
-        renderer.draw_text(pixmap, "AI", badge_x + 4.0, badge_y + 2.0, 18.0, 8.0, [20, 20, 20, 255]);
+        let badge_x = win.x + win.width - 32.0;
+        let badge_y = win.y + 6.0;
+        renderer.fill_rounded_rect(pixmap, badge_x, badge_y, 22.0, 16.0, 5.0, t.success);
+        renderer.draw_text(pixmap, "AI", badge_x + 5.0, badge_y + 3.0, 18.0, 8.0, [10, 15, 25, 255]);
     }
 }
 

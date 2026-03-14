@@ -1,6 +1,6 @@
 # Building and Running SomaOS on Windows (VirtualBox)
 
-Complete guide for building the SomaOS v0.8 image inside WSL2 and running it as a new VirtualBox VM on Windows.
+Complete guide for building the SomaOS v1.0.1 image inside WSL2 and running it as a new VirtualBox VM on Windows.
 
 ---
 
@@ -96,7 +96,7 @@ Open **VirtualBox** → click **New**.
 
 | Field | Value |
 |-------|-------|
-| Name | SomaOS v0.8 |
+| Name | SomaOS v1.0.1 |
 | Type | Linux |
 | Version | Other Linux (64-bit) |
 | Memory | **4096 MB** |
@@ -107,7 +107,7 @@ Click **Finish**.
 
 ### Configure before booting
 
-Right-click **SomaOS v0.8** → **Settings**:
+Right-click **SomaOS v1.0.1** → **Settings**:
 
 **Display tab** — this is critical for DRM/KMS:
 
@@ -202,12 +202,22 @@ Once the download finishes you'll see a success toast in the compositor.
 | `Enter` | Submit command (sidebar) / confirm shell input (terminal) |
 | `Escape` | Reject a pending HITL approval |
 | `Tab` | Shell completion (terminal) / switch to terminal (sidebar) |
+| `F1` | Open or focus the Terminal |
+| `F2` | Close the currently focused window |
+| `F3` | Toggle the AI Sidebar |
+| `F4` | Toggle Agent Mode (accent border) |
+| `F5` | Toggle Private Mode |
+| `Enter` | Submit command (sidebar) / confirm input (terminal) |
+| `Escape` | Dismiss modal, reject HITL, or close sidebar |
+| `Tab` | Shell completion (terminal) |
 | `Ctrl+C` | Interrupt running process (terminal) |
 | `Ctrl+D` | EOF / logout (terminal) |
 | `Ctrl+L` | Clear terminal |
 | `Right Ctrl + F2` | Switch to debug console (VirtualBox) |
 
-Scroll with mouse wheel or trackpad in either panel.
+Scroll with mouse wheel or trackpad in any window or panel.
+
+There is a **Dock** at the bottom to launch apps (Terminal, Browser, Settings) and toggle states (Sidebar, Agent Mode). Settings allows you to configure the default LLM provider directly in-OS.
 
 Click any **result card** or **error card** in the sidebar to open a full detail modal. Click anywhere to dismiss.
 

@@ -60,6 +60,13 @@ impl Dock {
                     is_active: false,
                 },
                 DockApp {
+                    name: "Settings".into(),
+                    icon_label: "⚙".into(),
+                    action: DockAction::OpenWindow(WindowContentType::Settings),
+                    is_open: false,
+                    is_active: false,
+                },
+                DockApp {
                     name: "AI Agent".into(),
                     icon_label: "AI".into(),
                     action: DockAction::ToggleAgentMode,
@@ -129,6 +136,10 @@ impl Dock {
                     app.is_open = has_browser;
                     app.is_active = false;
                 }
+                DockAction::OpenWindow(WindowContentType::Settings) => {
+                    app.is_open = false; // We will sync based on window existance below
+                    app.is_active = false;
+                }
                 DockAction::ToggleAgentMode => {
                     app.is_open = agent_mode;
                     app.is_active = agent_mode;
@@ -161,10 +172,18 @@ pub fn render_dock(
     let n = dock.apps.len();
     let (px, py, pw, ph) = Dock::pill_rect(screen_w, screen_h, n);
 
-    // Pill background — frosted glass approximation
+    // Drop shadow for the pill
+    renderer.fill_rounded_rect(pixmap, px + 4.0, py + 8.0, pw, ph, DOCK_RADIUS, [0, 0, 0, 50]);
+    renderer.fill_rounded_rect(pixmap, px + 1.0, py + 2.0, pw, ph, DOCK_RADIUS, [0, 0, 0, 40]);
+
+    // Crisp outer highlight rim
+    renderer.fill_rounded_rect(pixmap, px - 1.0, py - 1.0, pw + 2.0, ph + 2.0, DOCK_RADIUS + 1.0, [255, 255, 255, 20]);
+
+    // Pill background — frosted glass 
     renderer.fill_rounded_rect(pixmap, px, py, pw, ph, DOCK_RADIUS, t.bg_dock);
-    // Pill border
-    renderer.stroke_rect(pixmap, px, py, pw, ph, [255, 255, 255, 12]);
+    
+    // Inner border styling
+    renderer.stroke_rect(pixmap, px, py, pw, ph, [255, 255, 255, 8]);
 
     for (i, app) in dock.apps.iter().enumerate() {
         let ix = px + DOCK_ITEM_PAD + i as f32 * (DOCK_ITEM_W + DOCK_ITEM_PAD);
@@ -198,10 +217,19 @@ pub fn render_dock(
         // Open indicator dot (below pill)
         if app.is_open {
             let dot_color = if app.is_active { t.agent_active } else { t.accent };
+            
+            // Subtle neon glow
             renderer.fill_rounded_rect(pixmap,
-                ix + DOCK_ITEM_W / 2.0 - 2.5,
-                py + ph - 4.0,
-                5.0, 5.0, 2.5, dot_color);
+                ix + DOCK_ITEM_W / 2.0 - 4.0,
+                py + ph - 5.5,
+                8.0, 8.0, 4.0,
+                [dot_color[0], dot_color[1], dot_color[2], 80]);
+                
+            // Core bright dot
+            renderer.fill_rounded_rect(pixmap,
+                ix + DOCK_ITEM_W / 2.0 - 2.0,
+                py + ph - 3.5,
+                4.0, 4.0, 2.0, dot_color);
         }
     }
 }

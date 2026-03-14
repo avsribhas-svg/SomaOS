@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use soma_common::{ActionSchema, CapabilityResult, ParamSchema};
+use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult, ParamSchema};
 use std::net::TcpStream;
 use std::process::Command;
 use std::time::Duration;
@@ -66,7 +66,7 @@ impl Capability for NetworkCapability {
             _ => CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unknown network action: {}", action)),
+                error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown network action: {}", action))),
             },
         }
     }
@@ -79,7 +79,7 @@ fn execute_ping(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("Missing required param: host".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: host")),
             }
         }
     };
@@ -118,14 +118,14 @@ fn execute_ping(params: &Value) -> CapabilityResult {
                 CapabilityResult {
                     success: false,
                     data: json!({"output": stderr}),
-                    error: Some(format!("Ping failed: {}", stderr.lines().next().unwrap_or(""))),
+                    error: Some(CapabilityError::new(ErrorReason::NetworkError, format!("Ping failed: {}", stderr.lines().next().unwrap_or("")))),
                 }
             }
         }
         Err(e) => CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("Failed to run ping: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to run ping: {}", e))),
         },
     }
 }
@@ -137,7 +137,7 @@ fn execute_dns_lookup(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("Missing required param: hostname".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: hostname")),
             }
         }
     };
@@ -170,7 +170,7 @@ fn execute_dns_lookup(params: &Value) -> CapabilityResult {
                 CapabilityResult {
                     success: false,
                     data: Value::Null,
-                    error: Some(format!("DNS lookup failed for {}", hostname)),
+                    error: Some(CapabilityError::new(ErrorReason::NetworkError, format!("DNS lookup failed for {}", hostname))),
                 }
             }
         }
@@ -185,14 +185,14 @@ fn execute_dns_lookup(params: &Value) -> CapabilityResult {
                         error: if out.status.success() {
                             None
                         } else {
-                            Some("DNS lookup failed".to_string())
+                            Some(CapabilityError::new(ErrorReason::NetworkError, "DNS lookup failed"))
                         },
                     }
                 }
                 Err(e) => CapabilityResult {
                     success: false,
                     data: Value::Null,
-                    error: Some(format!("No DNS tools available: {}", e)),
+                    error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("No DNS tools available: {}", e))),
                 },
             }
         }
@@ -206,7 +206,7 @@ fn execute_curl(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("Missing required param: url".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: url")),
             }
         }
     };
@@ -253,7 +253,7 @@ fn execute_curl(params: &Value) -> CapabilityResult {
         Err(e) => CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("Failed to run curl: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to run curl: {}", e))),
         },
     }
 }
@@ -317,7 +317,7 @@ fn execute_ifconfig() -> CapabilityResult {
         Err(e) => CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("No network tools available: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("No network tools available: {}", e))),
         },
     }
 }
@@ -329,7 +329,7 @@ fn execute_port_check(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("Missing required param: host".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: host")),
             }
         }
     };
@@ -340,7 +340,7 @@ fn execute_port_check(params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("Missing required param: port".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: port")),
             }
         }
     };

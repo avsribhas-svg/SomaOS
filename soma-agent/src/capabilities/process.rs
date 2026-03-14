@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use soma_common::{ActionSchema, CapabilityResult};
+use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult};
 use std::process::Command;
 
 use super::param;
@@ -61,7 +61,7 @@ impl Capability for ProcessCapability {
             _ => CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unknown process action: {}", action)),
+                error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown process action: {}", action))),
             },
         }
     }
@@ -203,6 +203,6 @@ fn err(msg: &str) -> CapabilityResult {
     CapabilityResult {
         success: false,
         data: Value::Null,
-        error: Some(msg.to_string()),
+        error: Some(CapabilityError::new(ErrorReason::InternalError, "msg")),
     }
 }

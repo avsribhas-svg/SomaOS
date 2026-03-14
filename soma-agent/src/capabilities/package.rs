@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use soma_common::{ActionSchema, CapabilityResult};
+use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult};
 use std::process::Command;
 
 use super::{param, Capability};
@@ -68,7 +68,7 @@ impl Capability for PackageCapability {
                 return CapabilityResult {
                     success: false,
                     data: Value::Null,
-                    error: Some("No supported package manager found".to_string()),
+                    error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, "No supported package manager found")),
                 }
             }
         };
@@ -81,7 +81,7 @@ impl Capability for PackageCapability {
             _ => CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unknown package action: {}", action)),
+                error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown package action: {}", action))),
             },
         }
     }
@@ -103,7 +103,7 @@ fn execute_list(pm: &str, params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unsupported package manager: {}", pm)),
+                error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("Unsupported package manager: {}", pm))),
             }
         }
     };
@@ -137,7 +137,7 @@ fn execute_list(pm: &str, params: &Value) -> CapabilityResult {
         Err(e) => CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("Failed to list packages: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to list packages: {}", e))),
         },
     }
 }
@@ -149,7 +149,7 @@ fn execute_search(pm: &str, params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("Missing required param: query".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: query")),
             }
         }
     };
@@ -164,7 +164,7 @@ fn execute_search(pm: &str, params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unsupported package manager: {}", pm)),
+                error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("Unsupported package manager: {}", pm))),
             }
         }
     };
@@ -193,7 +193,7 @@ fn execute_search(pm: &str, params: &Value) -> CapabilityResult {
         Err(e) => CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("Failed to search packages: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to search packages: {}", e))),
         },
     }
 }
@@ -205,7 +205,7 @@ fn execute_install(pm: &str, params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("Missing required param: name".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: name")),
             }
         }
     };
@@ -220,7 +220,7 @@ fn execute_install(pm: &str, params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unsupported package manager: {}", pm)),
+                error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("Unsupported package manager: {}", pm))),
             }
         }
     };
@@ -241,14 +241,14 @@ fn execute_install(pm: &str, params: &Value) -> CapabilityResult {
                 error: if out.status.success() {
                     None
                 } else {
-                    Some(format!("Install failed: {}", stderr.lines().last().unwrap_or("")))
+                    Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Install failed: {}", stderr.lines().last().unwrap_or(""))))
                 },
             }
         }
         Err(e) => CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("Failed to install package: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to install package: {}", e))),
         },
     }
 }
@@ -260,7 +260,7 @@ fn execute_remove(pm: &str, params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some("Missing required param: name".to_string()),
+                error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: name")),
             }
         }
     };
@@ -275,7 +275,7 @@ fn execute_remove(pm: &str, params: &Value) -> CapabilityResult {
             return CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unsupported package manager: {}", pm)),
+                error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("Unsupported package manager: {}", pm))),
             }
         }
     };
@@ -296,14 +296,14 @@ fn execute_remove(pm: &str, params: &Value) -> CapabilityResult {
                 error: if out.status.success() {
                     None
                 } else {
-                    Some(format!("Remove failed: {}", stderr.lines().last().unwrap_or("")))
+                    Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Remove failed: {}", stderr.lines().last().unwrap_or(""))))
                 },
             }
         }
         Err(e) => CapabilityResult {
             success: false,
             data: Value::Null,
-            error: Some(format!("Failed to remove package: {}", e)),
+            error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to remove package: {}", e))),
         },
     }
 }

@@ -1,7 +1,7 @@
 use crate::capabilities::{param, Capability};
 use base64::Engine;
 use serde_json::{json, Value};
-use soma_common::{ActionSchema, CapabilityResult};
+use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult};
 use std::process::Command;
 
 /// Browser capability — headless web browsing via curl + scraper + chromium.
@@ -265,7 +265,7 @@ impl BrowserCapability {
                 "screenshot_base64": b64,
             }),
             error: if b64.is_none() {
-                Some("Chromium not found or screenshot failed".to_string())
+                Some(CapabilityError::new(ErrorReason::NotFound, "Chromium not found or screenshot failed"))
             } else {
                 None
             },
@@ -320,6 +320,6 @@ fn cap_err(msg: &str) -> CapabilityResult {
     CapabilityResult {
         success: false,
         data: Value::Null,
-        error: Some(msg.to_string()),
+        error: Some(CapabilityError::new(ErrorReason::InternalError, msg)),
     }
 }

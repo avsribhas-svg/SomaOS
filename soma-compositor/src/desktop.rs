@@ -2,16 +2,15 @@
 
 use crate::renderer::Renderer;
 use soma_common::AgentStatus;
-use tiny_skia::Pixmap;
+use tiny_skia::{Color, GradientStop, Pixmap, Point};
 
 /// Height of the always-visible top menu bar in pixels.
 pub const MENU_BAR_H: f32 = 28.0;
 
-/// Render the desktop wallpaper — a two-tone dark gradient approximated with
-/// two filled rects (top half darker, bottom half slightly lighter).
+/// Render the desktop wallpaper — a smooth, deep linear gradient.
 pub fn render_desktop(renderer: &mut Renderer, pixmap: &mut Pixmap, w: f32, h: f32) {
-    renderer.fill_rect(pixmap, 0.0, 0.0, w, h / 2.0, [18, 22, 30, 255]);
-    renderer.fill_rect(pixmap, 0.0, h / 2.0, w, h / 2.0, [22, 28, 38, 255]);
+    // Temporarily use a solid color instead of a gradient to avoid CPU rendering slowdowns in debug builds
+    renderer.fill_rect(pixmap, 0.0, 0.0, w, h, [15, 16, 26, 255]);
 }
 
 /// Render the macOS-style top menu bar (28px tall).

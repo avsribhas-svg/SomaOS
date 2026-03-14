@@ -2,7 +2,7 @@
 //! desktop environment (agent mode, dynamic apps, desktop actions, workflows).
 
 use serde_json::{json, Value};
-use soma_common::{ActionSchema, CapabilityResult};
+use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult};
 
 use super::{param, Capability};
 
@@ -133,7 +133,7 @@ impl Capability for DesktopAgentCapability {
             _ => CapabilityResult {
                 success: false,
                 data: Value::Null,
-                error: Some(format!("Unknown desktop_agent action: {}", action)),
+                error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown desktop_agent action: {}", action))),
             },
         }
     }

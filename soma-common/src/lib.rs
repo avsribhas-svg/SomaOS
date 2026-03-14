@@ -22,12 +22,47 @@ pub struct ParamSchema {
     pub description: String,
 }
 
+/// Classifies the failure reason so the agent can decide how to recover.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorReason {
+    MissingParam,
+    InvalidParam,
+    NotFound,
+    PermissionDenied,
+    CommandFailed,
+    NetworkError,
+    UnknownAction,
+    UnknownCapability,
+    UnsupportedPlatform,
+    InternalError,
+}
+
+/// Structured error from a capability execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityError {
+    pub reason: ErrorReason,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<String>,
+}
+
+impl CapabilityError {
+    pub fn new(reason: ErrorReason, message: impl Into<String>) -> Self {
+        Self { reason, message: message.into(), context: None, alternatives: Vec::new() }
+    }
+    pub fn with_context(mut self, ctx: Value) -> Self { self.context = Some(ctx); self }
+    pub fn with_alt(mut self, alt: impl Into<String>) -> Self { self.alternatives.push(alt.into()); self }
+}
+
 /// Structured output from a capability execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityResult {
     pub success: bool,
     pub data: Value,
-    pub error: Option<String>,
+    pub error: Option<CapabilityError>,
 }
 
 /// Describes a registered capability (sent to compositor for discovery)

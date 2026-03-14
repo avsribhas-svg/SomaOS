@@ -477,7 +477,7 @@ impl Sidebar {
                         if let Some(err) = &r.error {
                             renderer.draw_text(pixmap, "! Error:", mx + 18.0, ty, mw - 36.0, 9.0, t.error);
                             ty += 15.0;
-                            for line in wrap_text(err, ((mw - 56.0) / 7.5) as usize) {
+                            for line in wrap_text(&err.message, ((mw - 56.0) / 7.5) as usize) {
                                 if ty > my + mh - 36.0 { break; }
                                 renderer.draw_text(pixmap, &format!("  {}", line), mx + 18.0, ty, mw - 36.0, 9.5, t.text_secondary);
                                 ty += 15.0;
@@ -602,31 +602,40 @@ impl Sidebar {
         let t = renderer.theme.clone();
         let w = SIDEBAR_WIDTH;
 
-        // Background — VS Code activity bar style
+        // Background — glassy translucent panel
         renderer.fill_rect(pixmap, ox, top_y, w, height, t.bg_sidebar);
-        renderer.fill_rect(pixmap, ox, top_y, 1.0, height, t.border);
+        
+        // Deep drop shadow line on the left edge
+        renderer.fill_rect(pixmap, ox - 2.0, top_y, 2.0, height, [0, 0, 0, 60]);
+        // Crisp inner highlight on the left edge
+        renderer.fill_rect(pixmap, ox, top_y, 1.0, height, [255, 255, 255, 12]);
 
-        // ─── Title Bar — VS Code panel header style ───
-        // Slightly darker header strip
-        renderer.fill_rect(pixmap, ox, top_y, w, 44.0, [0, 0, 0, 30]);
-        renderer.fill_rect(pixmap, ox, top_y + 43.0, w, 1.0, t.border);
+        // ─── Title Bar ───
+        // Sleeker dark translucent header strip
+        renderer.fill_rect(pixmap, ox, top_y, w, 50.0, [10, 10, 12, 180]);
+        // Soft bottom shadow and crisp highlight for header
+        renderer.fill_rect(pixmap, ox, top_y + 49.0, w, 1.0, [0, 0, 0, 40]);
+        renderer.fill_rect(pixmap, ox, top_y + 50.0, w, 1.0, [255, 255, 255, 8]);
 
-        // Agent name
-        renderer.draw_text(pixmap, "Soma", ox + 14.0, top_y + 15.0, 80.0, 11.0, t.text_secondary);
+        // Agent name — brighter, slightly larger for premium feel
+        renderer.draw_text(pixmap, "Soma", ox + 20.0, top_y + 18.0, 80.0, 14.0, t.text_primary);
 
-        // Status dot + label — right-aligned, VS Code status bar style
+        // Status dot + label — right-aligned
         let status_color = match self.status {
             AgentStatus::Idle => t.success,
             AgentStatus::Thinking => t.accent,
             AgentStatus::AwaitingApproval => t.warning,
-            AgentStatus::Executing => [230, 140, 50, 255],
+            AgentStatus::Executing => [255, 140, 60, 255], 
             AgentStatus::Completed => t.success,
             AgentStatus::Error => t.error,
         };
         let status_text = format!("{}", self.status);
-        // Dot indicator
-        renderer.fill_rounded_rect(pixmap, ox + w - 100.0, top_y + 19.0, 6.0, 6.0, 3.0, status_color);
-        renderer.draw_text(pixmap, &status_text, ox + w - 90.0, top_y + 16.0, 78.0, 10.0, status_color);
+        
+        // Glowing dot indicator
+        renderer.fill_rounded_rect(pixmap, ox + w - 100.0, top_y + 20.0, 8.0, 8.0, 4.0, [status_color[0], status_color[1], status_color[2], 60]);
+        renderer.fill_rounded_rect(pixmap, ox + w - 98.0, top_y + 22.0, 4.0, 4.0, 2.0, status_color);
+        
+        renderer.draw_text(pixmap, &status_text, ox + w - 86.0, top_y + 18.0, 78.0, 11.0, status_color);
 
         // ─── Tab Bar — VS Code editor tab style ───
         let tab_y = top_y + 44.0;
@@ -971,7 +980,7 @@ fn format_all_results(results: &[CapabilityResult]) -> Vec<String> {
     for r in results {
         if !r.success {
             if let Some(err) = &r.error {
-                lines.push(format!("  ! {}", truncate_str(err, 50)));
+                lines.push(format!("  ! {}", truncate_str(&err.message, 50)));
             }
             continue;
         }
