@@ -55,7 +55,7 @@ The system provides:
 - **Private mode** — one keystroke disables observation; the menu bar shows a `[pvt]` indicator. The agent still responds to prompts but learns nothing from the session.
 - A **custom DRM/KMS compositor** that renders directly to GPU framebuffer — no X11 or Wayland server required
 - A **login screen** that boots straight into Soma, with no traditional desktop
-- An **agent daemon** with 35 built-in capability actions across 9 modules, plus unlimited user-defined capabilities (loaded from `~/.soma/capabilities/*.json`)
+- An **agent daemon** with 43 built-in capability actions across 9 modules, plus unlimited user-defined capabilities (loaded from `~/.soma/capabilities/*.json`)
 - **Browser panel** — headless Chromium integration; agent can navigate, scrape, and screenshot. Browser opens as a floating window in the desktop environment.
 - **Vision capability** — image understanding via Ollama qwen2.5-vl:7b; agent can analyze images with natural language queries
 - **On-device LLM** (qwen2.5-coder:7b via Ollama) with a three-layer intent pipeline for robust natural language understanding
@@ -307,10 +307,10 @@ All paths support `~` expansion.
 | Action | Description | Risk |
 |--------|-------------|------|
 | `list_processes` | List running processes | Low |
-| `kill` | Kill a process by PID | High |
+| `kill_process` | Kill a process by PID | High |
 | `service_status` | Check systemd service status | Low |
-| `service_start` | Start a service | Medium |
-| `service_stop` | Stop a service | Medium |
+| `service_restart` | Restart a service | Medium |
+| `service_list` | List all systemd services | Low |
 
 ### System (6 actions)
 
@@ -320,7 +320,7 @@ All paths support `~` expansion.
 | `uptime` | Get system uptime | Low |
 | `disk_usage` | Check disk space | Low |
 | `memory_info` | Show memory usage | Low |
-| `cpu_info` | Show CPU information | Low |
+| `kernel_info` | Show kernel version and OS information | Low |
 | `network_status` | Check network connectivity | Low |
 
 ### Network (5 actions)
