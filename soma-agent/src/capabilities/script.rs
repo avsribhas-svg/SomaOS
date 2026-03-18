@@ -47,6 +47,12 @@ pub struct ScriptCapabilityDef {
     pub name: String,
     pub description: String,
     pub actions: Vec<ScriptAction>,
+    #[serde(default = "default_version")]
+    pub version: String,
+}
+
+fn default_version() -> String {
+    "1.0.0".to_string()
 }
 
 /// A capability backed by shell-command templates, loaded from a JSON file.
@@ -65,6 +71,12 @@ impl ScriptCapability {
         let def: ScriptCapabilityDef = serde_json::from_str(&content)?;
         Ok(Self::new(def))
     }
+}
+
+/// Wrap a shell argument in single quotes, escaping any internal single quotes.
+/// This prevents command injection when values are substituted into shell templates.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 impl Capability for ScriptCapability {
@@ -101,19 +113,20 @@ impl Capability for ScriptCapability {
         };
 
         // Substitute {param_name} placeholders in the shell template.
+        // Each value is shell-quoted to prevent command injection.
         let mut cmd = script_action.shell_template.clone();
         if let Some(obj) = params.as_object() {
             for (key, val) in obj {
                 let placeholder = format!("{{{}}}", key);
-                let value = match val {
+                let raw = match val {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
-                cmd = cmd.replace(&placeholder, &value);
+                cmd = cmd.replace(&placeholder, &shell_quote(&raw));
             }
         }
 
-        log::info!("ScriptCapability '{}': running: {}", self.def.name, cmd);
+        log::info!("ScriptCapability '{}': executing action '{}'", self.def.name, action);
 
         match Command::new("sh").args(["-c", &cmd]).output() {
             Ok(output) => {

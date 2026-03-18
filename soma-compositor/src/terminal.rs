@@ -118,7 +118,9 @@ impl Terminal {
 
                 // Exec shell
                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-                let shell_cstr = std::ffi::CString::new(shell.clone()).unwrap();
+                // CString::new fails only if the string contains null bytes; fall back to /bin/sh
+                let shell_cstr = std::ffi::CString::new(shell.clone())
+                    .unwrap_or_else(|_| std::ffi::CString::new("/bin/sh").expect("hardcoded valid shell path"));
                 let args = [shell_cstr.clone()];
                 let _ = nix::unistd::execvp(&shell_cstr, &args);
                 std::process::exit(1);
@@ -188,7 +190,7 @@ impl Terminal {
                 });
 
                 self.lines.push(TermLine {
-                    content: "SomaOS Terminal v0.6.0 (PTY)".to_string(),
+                    content: "SomaOS Terminal v1.0 (PTY)".to_string(),
                     is_input: false,
                     color: TermColor::Dim,
                 });

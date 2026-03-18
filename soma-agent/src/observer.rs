@@ -105,10 +105,18 @@ impl DesktopObserver {
     pub fn save(&self) {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
         let dir = std::path::PathBuf::from(&home).join(".soma");
-        let _ = std::fs::create_dir_all(&dir);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            log::warn!("Failed to create ~/.soma directory: {}", e);
+            return;
+        }
         let path = dir.join("workflows.json");
-        if let Ok(json) = serde_json::to_string_pretty(&self.workflows) {
-            let _ = std::fs::write(&path, json);
+        match serde_json::to_string_pretty(&self.workflows) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    log::warn!("Failed to save workflows.json: {}", e);
+                }
+            }
+            Err(e) => log::warn!("Failed to serialise workflows: {}", e),
         }
     }
 

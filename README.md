@@ -45,7 +45,7 @@ The HITL (Human-in-the-Loop) approval system is the conflict resolution primitiv
 
 ## Abstract
 
-Current state (v1.0 in progress, v0.9 stable): SomaOS runs as a bootable Linux image with a custom bare-metal compositor.
+Current state (v1.0.2 stable): SomaOS runs as a bootable Linux image with a custom bare-metal compositor.
 
 The system provides:
 - A **full macOS-style desktop environment** — floating windows, a centred dock, a menu bar, and an AI sidebar as a slide-in overlay. The terminal and browser are applications, not panels.
@@ -58,7 +58,7 @@ The system provides:
 - An **agent daemon** with 43 built-in capability actions across 9 modules, plus unlimited user-defined capabilities (loaded from `~/.soma/capabilities/*.json`)
 - **Browser panel** — headless Chromium integration; agent can navigate, scrape, and screenshot. Browser opens as a floating window in the desktop environment.
 - **Vision capability** — image understanding via Ollama qwen2.5-vl:7b; agent can analyze images with natural language queries
-- **On-device LLM** (qwen2.5-coder:7b via Ollama) with a three-layer intent pipeline for robust natural language understanding
+- **Multi-provider LLM** (Ollama, Anthropic, OpenAI, Gemini) with native tool calling; provider and model hot-swappable from the Settings tab
 - A **Human-in-the-Loop (HITL) approval system** enforcing mandatory human review before any action
 - **Self-improvement loop** — agent proposes new capabilities via `meta.propose`; human approves through HITL; registry grows without a Rust rebuild
 - **Conversation memory** — the agent remembers recent exchanges for follow-up commands
@@ -255,13 +255,11 @@ User types in sidebar
   Agent: Layer 0 — Rust keyword preprocessor
     (direct-maps obvious commands before hitting LLM)
         │
-        ▼
-  Agent: Layer 1 — Free-text LLM parse
-    Ollama qwen2.5-coder:7b → intent + capability hint
-        │
-        ▼
-  Agent: Layer 2 — Structured JSON planner
-    LLM generates full TaskPlan JSON
+        ▼ (if no keyword match)
+  Agent: LLM Provider tool_call()
+    Capability registry → OpenAI-compatible tool schemas (capability__action)
+    Provider uses native function/tool calling (Ollama / Anthropic / OpenAI / Gemini)
+    Returns ToolCall { name, arguments } → TaskPlan
         │
         ▼
   TaskPlanReady → Compositor shows HITL approval modal
@@ -444,7 +442,7 @@ Or tell the agent: _"restart the agent service"_ — it will use the `process` c
 
 ## Software Specifications
 
-### Intent Pipeline (Three-Layer)
+### Intent Pipeline (Native Tool Calling)
 
 ```
 Input: "show me what's in Downloads"
@@ -456,15 +454,18 @@ Layer 0 — Rust keyword preprocessor
   If matched: skip LLM entirely → instant response
   │
   ▼ (if no keyword match)
-Layer 1 — Free-text LLM parse
-  Prompt: "What capability and action does this request use?"
-  Response: { "capability": "filesystem", "action": "list_dir", "hint": "..." }
+LLM Provider tool_call()
+  Capability registry converted to OpenAI-compatible tool schemas (capability__action namespace)
+  Provider (Ollama / Anthropic / OpenAI / Gemini) uses native function/tool calling
+  Returns structured ToolCall { name, arguments } — no JSON parsing needed
   │
   ▼
-Layer 2 — Structured JSON planner
-  Prompt: "Generate a TaskPlan JSON for: <input> using <capability>.<action>"
-  Response: full TaskPlan with steps, params, risk_level
+CapabilityRegistry dispatch
+  Tool name decoded: "filesystem__list_dir" → filesystem.list_dir
+  Parameters passed directly from LLM response → TaskPlan built → HITL modal
 ```
+
+Provider is hot-swappable from the Settings tab (`~/.soma/config.toml`). Default: Ollama with `qwen2.5-coder:7b`.
 
 ### IPC Protocol
 
@@ -694,16 +695,20 @@ Native OS Project/
 │
 ├── soma-compositor/                    # Compositor binary
 │   └── src/
-│       ├── main.rs                     # Desktop event loop, AppState, 9-layer redraw, input routing
+│       ├── main.rs                     # SomaApp struct, winit event loop, thin IPC glue (~712 lines)
+│       ├── compositor.rs               # 9-layer render stack, state sync, animation, toast lifecycle
+│       ├── event_handler.rs            # All keyboard/mouse/scroll input dispatch, window open/focus/close
+│       ├── config_loader.rs            # Shared load_config_values() — reads ~/.soma/config.toml for compositor UI
 │       ├── login.rs                    # Full-screen login screen (reads /etc/soma/passwd)
 │       ├── renderer.rs                 # tiny-skia + cosmic-text renderer + Theme palette
 │       ├── sidebar.rs                  # Chat UI, slide animation, result cards, HITL overlay, workflow annotation
+│       ├── settings_app.rs             # Settings floating window (provider radio, model/key/url fields)
 │       ├── terminal.rs                 # PTY terminal emulator
 │       ├── browser_panel.rs            # Browser panel (URL bar + headless screenshot)
 │       ├── desktop.rs                  # Wallpaper rendering, menu bar rendering
-│       ├── dock.rs                     # Dock struct, DockApp, render_dock, hit testing
+│       ├── dock.rs                     # Dock struct, DockApp, render_dock, hit testing, open-state sync
 │       ├── window_manager.rs           # FloatingWindow, WindowContent, AppDef, Widget, chrome render
-│       ├── ipc_client.rs               # Agent daemon connection
+│       ├── ipc_client.rs               # Agent daemon connection + auto-reconnect (5s retry on disconnect)
 │       ├── backend/
 │       │   ├── mod.rs                  # InputEvent types (KeyCode, MouseBtn)
 │       │   └── drm.rs                  # DRM/KMS: open card, dumb buffer, page flip
@@ -778,12 +783,13 @@ User-proposed capabilities use shell-command templates (`{param}` substitution) 
 
 When a use case proves stable and performance matters, a JSON capability can be promoted to a built-in Rust capability. The JSON definition serves as the spec.
 
-### Why a three-layer intent pipeline?
+### Why native tool calling over a multi-layer prompt pipeline?
 
-A single LLM call for every command is slow and unreliable for common patterns:
-- **Layer 0** (Rust keywords) handles ~60% of commands instantly with zero LLM latency
-- **Layer 1** (free-text parse) identifies the right capability module without generating full JSON
-- **Layer 2** (JSON planner) generates the complete TaskPlan only once the capability is known
+The original three-layer prompt pipeline (keyword → free-text parse → JSON planner) was replaced in v1.0 with provider-native tool/function calling:
+- **Layer 0** (Rust keywords) still handles ~60% of commands instantly with zero LLM latency — unchanged
+- **Single LLM call** for everything else: capability registry converts to OpenAI-compatible tool schemas, provider returns a structured `ToolCall` with arguments — no JSON parsing, no chained prompts, no hand-rolled extraction
+- **More reliable**: providers are trained for function calling; the old JSON extraction step was brittle on long outputs
+- **Provider-agnostic**: the same `LlmProvider` trait works across Ollama, Anthropic, OpenAI, Gemini — each uses its native calling convention (tool_use, function_calling, functionCall)
 
 ### Why local LLM (Ollama)?
 

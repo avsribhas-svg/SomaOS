@@ -61,8 +61,8 @@ impl LlmProvider for AnthropicProvider {
 
         let body = serde_json::json!({
             "model": self.model,
-            "max_tokens": 1024,
-            "system": "You are an AI agent that controls a computer. Use the provided tools to complete the user's request. Always use tools — never reply with plain text.",
+            "max_tokens": 4096,
+            "system": super::SYSTEM_PROMPT,
             "tools": tools_json,
             "messages": messages,
         });

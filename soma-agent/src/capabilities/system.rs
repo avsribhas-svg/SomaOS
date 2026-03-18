@@ -135,26 +135,75 @@ impl SystemCapability {
     }
 
     fn memory_info(&self) -> CapabilityResult {
-        match fs::read_to_string("/proc/meminfo") {
-            Ok(content) => {
-                let mut info = json!({});
-                for line in content.lines() {
-                    if let Some((key, val)) = line.split_once(':') {
-                        let key = key.trim().to_lowercase().replace(' ', "_");
-                        let val = val.trim().to_string();
-                        // Parse common keys
-                        match key.as_str() {
-                            "memtotal" | "memfree" | "memavailable" | "buffers" | "cached"
-                            | "swaptotal" | "swapfree" => {
-                                info[&key] = json!(val);
+        // Linux: read /proc/meminfo
+        #[cfg(target_os = "linux")]
+        {
+            match fs::read_to_string("/proc/meminfo") {
+                Ok(content) => {
+                    let mut info = json!({});
+                    for line in content.lines() {
+                        if let Some((key, val)) = line.split_once(':') {
+                            let key = key.trim().to_lowercase().replace(' ', "_");
+                            let val = val.trim().to_string();
+                            match key.as_str() {
+                                "memtotal" | "memfree" | "memavailable" | "buffers" | "cached"
+                                | "swaptotal" | "swapfree" => { info[&key] = json!(val); }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
+                    return ok(info);
                 }
-                ok(info)
+                Err(e) => return err(&format!("Cannot read /proc/meminfo: {}", e)),
             }
-            Err(e) => err(&format!("Cannot read /proc/meminfo: {}", e)),
+        }
+
+        // macOS / other: vm_stat + sysctl
+        #[cfg(not(target_os = "linux"))]
+        {
+            use std::process::Command;
+            let mut info = json!({});
+
+            // Total physical memory
+            if let Ok(out) = Command::new("sysctl").arg("-n").arg("hw.memsize").output() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if let Ok(bytes) = s.parse::<u64>() {
+                    info["memtotal"] = json!(format!("{} kB", bytes / 1024));
+                    info["memtotal_bytes"] = json!(bytes);
+                }
+            }
+
+            // Free/used from vm_stat
+            if let Ok(out) = Command::new("vm_stat").output() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let mut page_size: u64 = 4096;
+                let mut free_pages: u64 = 0;
+                let mut inactive_pages: u64 = 0;
+                for line in text.lines() {
+                    if line.contains("page size of") {
+                        if let Some(n) = line.split_whitespace()
+                            .find(|w| w.parse::<u64>().is_ok())
+                            .and_then(|w| w.parse().ok())
+                        { page_size = n; }
+                    }
+                    let parse_pages = |l: &str| -> u64 {
+                        l.split(':').nth(1)
+                            .map(|s| s.trim().trim_end_matches('.'))
+                            .and_then(|s| s.replace(',', "").parse().ok())
+                            .unwrap_or(0)
+                    };
+                    if line.starts_with("Pages free")     { free_pages     = parse_pages(line); }
+                    if line.starts_with("Pages inactive") { inactive_pages = parse_pages(line); }
+                }
+                let free_bytes = (free_pages + inactive_pages) * page_size;
+                info["memfree"] = json!(format!("{} kB", free_bytes / 1024));
+                if let Some(total) = info["memtotal_bytes"].as_u64() {
+                    let used = total.saturating_sub(free_bytes);
+                    info["memused"] = json!(format!("{} kB", used / 1024));
+                }
+            }
+
+            ok(info)
         }
     }
 

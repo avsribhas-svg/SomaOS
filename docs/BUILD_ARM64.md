@@ -3,6 +3,21 @@
 Builds a native ARM64 SomaOS image and runs it on Apple Silicon Mac using UTM.
 
 > For x86_64 (Windows / Linux / Intel Mac), see [BUILD_x86_64.md](BUILD_x86_64.md).
+> For a full local CI workflow (replaces GitHub Actions), see [LOCAL_CI.md](LOCAL_CI.md).
+
+---
+
+## Getting a Pre-Built Image
+
+You don't have to build from scratch. Two options:
+
+**Option A — GitHub Actions artifact** (when CI minutes are available):
+1. Go to the repo → **Actions** → latest successful run on `main`
+2. Download the `soma-os-aarch64-<sha>` artifact (contains `soma-os.img.gz` + `kernel`)
+3. `gunzip soma-os.img.gz` → proceed to Step 3 (Run in UTM) below
+
+**Option B — Build locally** (always available, no CI minutes needed):
+Follow Steps 1–2 below. Docker does all the heavy lifting — no native Linux toolchain needed.
 
 ---
 

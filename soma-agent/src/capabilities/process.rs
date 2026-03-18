@@ -2,6 +2,22 @@ use serde_json::{json, Value};
 use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult};
 use std::process::Command;
 
+#[cfg(target_os = "linux")]
+extern "C" { fn getuid() -> u32; }
+
+/// Read the UID of a process from /proc/<pid>/status (Linux only).
+#[cfg(target_os = "linux")]
+fn process_uid(pid: i64) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{}/status", pid)).ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            // "Uid: real effective saved fs"
+            return rest.split_whitespace().next()?.parse().ok();
+        }
+    }
+    None
+}
+
 use super::param;
 use super::Capability;
 
@@ -107,6 +123,26 @@ impl ProcessCapability {
             None => return err("Missing required param: pid"),
         };
 
+        if pid <= 1 {
+            return err("Refusing to kill PID <= 1 (init/kernel)");
+        }
+
+        // On Linux, verify the process is owned by the current user.
+        #[cfg(target_os = "linux")]
+        {
+            let current_uid = unsafe { getuid() };
+            if current_uid != 0 {
+                if let Some(target_uid) = process_uid(pid) {
+                    if target_uid != current_uid {
+                        return err(&format!(
+                            "Permission denied: PID {} is owned by uid {}, not the current user",
+                            pid, target_uid
+                        ));
+                    }
+                }
+            }
+        }
+
         match Command::new("kill").arg(pid.to_string()).output() {
             Ok(output) => {
                 if output.status.success() {
@@ -203,6 +239,6 @@ fn err(msg: &str) -> CapabilityResult {
     CapabilityResult {
         success: false,
         data: Value::Null,
-        error: Some(CapabilityError::new(ErrorReason::InternalError, "msg")),
+        error: Some(CapabilityError::new(ErrorReason::InternalError, msg)),
     }
 }

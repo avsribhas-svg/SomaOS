@@ -4,6 +4,25 @@ Builds a bootable x86_64 SomaOS image and runs it in VirtualBox (Windows) or QEM
 
 ---
 
+> For Apple Silicon Mac (ARM64 native), see [BUILD_ARM64.md](BUILD_ARM64.md).
+> For a full local CI workflow (replaces GitHub Actions), see [LOCAL_CI.md](LOCAL_CI.md).
+
+---
+
+## Getting a Pre-Built Image
+
+You don't have to build from scratch. Two options:
+
+**Option A — GitHub Actions artifact** (when CI minutes are available):
+1. Go to the repo → **Actions** → latest successful run on `main`
+2. Download the `soma-os-x86_64-<sha>` artifact (contains `soma-os.img.gz` + `kernel`)
+3. `gunzip soma-os.img.gz` → proceed to the Running section below
+
+**Option B — Build locally** (always available, no CI minutes needed):
+Follow the steps below. Docker does all the heavy lifting — no native Linux toolchain needed.
+
+---
+
 ## Overview
 
 ```

@@ -7,8 +7,25 @@ use std::process::Command;
 /// Browser capability — headless web browsing via curl + scraper + chromium.
 pub struct BrowserCapability;
 
-const SCREENSHOT_PATH: &str = "/tmp/soma-browser.png";
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) SomaOS/0.9 (AI Browser)";
+
+/// Returns the screenshot path under ~/.cache/soma/, creating the directory if needed.
+/// Falls back to /tmp only if HOME is not set.
+fn screenshot_path() -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let dir = format!("{}/.cache/soma", home);
+        let _ = std::fs::create_dir_all(&dir);
+        // Set directory permissions to 0o700 so only the owner can read it
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        }
+        format!("{}/browser-screenshot.png", dir)
+    } else {
+        "/tmp/soma-browser.png".to_string()
+    }
+}
 
 impl Capability for BrowserCapability {
     fn name(&self) -> &str {
@@ -93,7 +110,7 @@ impl BrowserCapability {
             .unwrap_or_default();
 
         let text_sel = Selector::parse("p, h1, h2, h3, h4, li, article")
-            .unwrap_or_else(|_| Selector::parse("body").unwrap());
+            .unwrap_or_else(|_| Selector::parse("body").expect("'body' is always a valid CSS selector"));
         let mut parts: Vec<String> = doc
             .select(&text_sel)
             .map(|e| e.text().collect::<String>().trim().to_string())
@@ -104,7 +121,7 @@ impl BrowserCapability {
         let text = parts.join("\n");
 
         let link_sel = Selector::parse("a[href]")
-            .unwrap_or_else(|_| Selector::parse("body").unwrap());
+            .unwrap_or_else(|_| Selector::parse("body").expect("'body' is always a valid CSS selector"));
         let links: Vec<String> = doc
             .select(&link_sel)
             .filter_map(|e| e.value().attr("href"))
@@ -128,7 +145,8 @@ impl BrowserCapability {
             Err(e) => (String::new(), format!("Fetch error: {}", e), vec![]),
         };
 
-        let screenshot_b64 = self.chromium_screenshot(&url);
+        let path = screenshot_path();
+        let screenshot_b64 = self.chromium_screenshot(&url, &path);
 
         CapabilityResult {
             success: true,
@@ -138,7 +156,7 @@ impl BrowserCapability {
                 "text_snippet": &text[..text.len().min(600)],
                 "links": links,
                 "screenshot_base64": screenshot_b64,
-                "screenshot_path": SCREENSHOT_PATH,
+                "screenshot_path": path,
             }),
             error: None,
         }
@@ -256,12 +274,13 @@ impl BrowserCapability {
             None => return cap_err("Missing 'url' parameter"),
         };
 
-        let b64 = self.chromium_screenshot(&url);
+        let path = screenshot_path();
+        let b64 = self.chromium_screenshot(&url, &path);
         CapabilityResult {
             success: b64.is_some(),
             data: json!({
                 "url": url,
-                "screenshot_path": SCREENSHOT_PATH,
+                "screenshot_path": path,
                 "screenshot_base64": b64,
             }),
             error: if b64.is_none() {
@@ -273,8 +292,8 @@ impl BrowserCapability {
     }
 
     /// Find an available Chromium binary and take a screenshot of `url`.
-    /// Returns base64-encoded PNG on success.
-    fn chromium_screenshot(&self, url: &str) -> Option<String> {
+    /// Writes to `out_path` (should be under ~/.cache/soma/). Returns base64-encoded PNG on success.
+    fn chromium_screenshot(&self, url: &str, out_path: &str) -> Option<String> {
         let bins = [
             "chromium-browser",
             "chromium",
@@ -295,7 +314,7 @@ impl BrowserCapability {
                 "--no-sandbox",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
-                &format!("--screenshot={}", SCREENSHOT_PATH),
+                &format!("--screenshot={}", out_path),
                 "--window-size=1280,720",
                 "--virtual-time-budget=5000",
                 url,
@@ -303,7 +322,7 @@ impl BrowserCapability {
             .output()
             .ok()?;
 
-        let bytes = std::fs::read(SCREENSHOT_PATH).ok()?;
+        let bytes = std::fs::read(out_path).ok()?;
         Some(base64::engine::general_purpose::STANDARD.encode(&bytes))
     }
 }

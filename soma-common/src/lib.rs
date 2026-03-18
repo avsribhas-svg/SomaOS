@@ -71,6 +71,15 @@ pub struct CapabilityInfo {
     pub name: String,
     pub description: String,
     pub actions: Vec<ActionSchema>,
+    #[serde(default = "default_cap_version")]
+    pub version: String,
+    /// true = compiled-in built-in; false = user-defined script capability
+    #[serde(default)]
+    pub is_builtin: bool,
+}
+
+fn default_cap_version() -> String {
+    "1.0.0".to_string()
 }
 
 // ──────────────────────────────────────────────
@@ -168,6 +177,12 @@ pub enum CompositorMessage {
     },
     /// Ping / health check
     Ping,
+    /// NativeApp state changed (human edit) — agent should update its cache
+    AppStateChanged { window_id: u32, state: AppState },
+    /// Agent should reload user-defined script capabilities from ~/.soma/capabilities/
+    ReloadCapabilities,
+    /// Request current capability registry snapshot (for UI)
+    QueryCapabilities,
 }
 
 /// Messages sent from the agent daemon to the compositor (or CLI)
@@ -223,6 +238,36 @@ pub enum AgentMessage {
     ActivityUpdate { text: String },
     /// Pong
     Pong,
+    /// Agent requests an action on a NativeApp window (write_cell, apply_formula, etc.)
+    AppAction {
+        window_id: u32,
+        action: String,
+        params: Value,
+    },
+    /// Capabilities were reloaded — includes new total count
+    CapabilitiesReloaded { count: usize },
+}
+
+// ──────────────────────────────────────────────
+//  AgentAPI — shared app state (v1.1)
+// ──────────────────────────────────────────────
+
+/// Structured state snapshot of a NativeApp window.
+/// Sent compositor → agent whenever app state changes (human or agent write).
+///
+/// `summary`: compact JSON for orchestrator-level decisions (schema, row_count, selection…)
+/// `cells`:   full grid data for worker agents that need to read ranges
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppState {
+    /// App type discriminant — e.g. "spreadsheet"
+    pub app_type: String,
+    /// Compact summary for orchestrator decisions
+    pub summary: Value,
+    /// Full cell/content data for worker agent reads (None = not yet populated)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cells: Option<Value>,
+    /// True if there are unsaved / uncommitted changes
+    pub dirty: bool,
 }
 
 // ──────────────────────────────────────────────

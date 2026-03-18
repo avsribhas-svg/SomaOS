@@ -108,10 +108,12 @@ impl Capability for FileSystemCapability {
 
 impl FileSystemCapability {
     fn list_dir(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
-            Some(p) => p,
-            None => return err("Missing required param: path"),
-        };
+        let path = params
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(expand_tilde)
+            .unwrap_or_else(|| ".".to_string());
+        if let Err(e) = guard_traversal(&path) { return e; }
         let show_hidden = params
             .get("show_hidden")
             .and_then(|v| v.as_bool())
@@ -146,6 +148,7 @@ impl FileSystemCapability {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
+        if let Err(e) = guard_traversal(&path) { return e; }
 
         // Detect image extensions — return base64-encoded bytes instead of text
         let ext = Path::new(&path)
@@ -195,6 +198,7 @@ impl FileSystemCapability {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
+        if let Err(e) = guard_traversal(&path) { return e; }
         let content = match params.get("content").and_then(|v| v.as_str()) {
             Some(c) => c,
             None => return err("Missing required param: content"),
@@ -211,6 +215,7 @@ impl FileSystemCapability {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
+        if let Err(e) = guard_traversal(&path) { return e; }
 
         match fs::create_dir_all(&path) {
             Ok(_) => ok(json!({ "path": path, "created": true })),
@@ -223,6 +228,7 @@ impl FileSystemCapability {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
+        if let Err(e) = guard_traversal(&path) { return e; }
 
         let p = Path::new(&path);
         let result = if p.is_dir() {
@@ -242,10 +248,12 @@ impl FileSystemCapability {
             Some(p) => p,
             None => return err("Missing required param: from"),
         };
+        if let Err(e) = guard_traversal(&from) { return e; }
         let to = match params.get("to").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: to"),
         };
+        if let Err(e) = guard_traversal(&to) { return e; }
 
         match fs::copy(&from, &to) {
             Ok(bytes) => ok(json!({ "from": from, "to": to, "bytes_copied": bytes })),
@@ -258,10 +266,12 @@ impl FileSystemCapability {
             Some(p) => p,
             None => return err("Missing required param: from"),
         };
+        if let Err(e) = guard_traversal(&from) { return e; }
         let to = match params.get("to").and_then(|v| v.as_str()).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: to"),
         };
+        if let Err(e) = guard_traversal(&to) { return e; }
 
         match fs::rename(&from, &to) {
             Ok(_) => ok(json!({ "from": from, "to": to, "moved": true })),
@@ -274,10 +284,15 @@ impl FileSystemCapability {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
+        if let Err(e) = guard_traversal(&path) { return e; }
         let pattern = match params.get("pattern").and_then(|v| v.as_str()) {
             Some(p) => p,
             None => return err("Missing required param: pattern"),
         };
+        // Reject patterns that look like find flags or path traversal
+        if pattern.starts_with('-') || pattern.contains('/') || pattern.contains("..") {
+            return err("Invalid pattern: must be a plain glob (e.g. '*.rs'), not a path or flag");
+        }
 
         let mut matches = Vec::new();
         if let Ok(output) = std::process::Command::new("find")
@@ -300,6 +315,7 @@ impl FileSystemCapability {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
+        if let Err(e) = guard_traversal(&path) { return e; }
 
         match fs::metadata(&path) {
             Ok(meta) => {
@@ -333,6 +349,23 @@ fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
+/// Reject paths containing `..` components to prevent path traversal attacks.
+fn guard_traversal(path: &str) -> Result<(), CapabilityResult> {
+    // Split on both / and \ and check each component
+    if path.split(['/', '\\']).any(|c| c == "..") {
+        Err(CapabilityResult {
+            success: false,
+            data: Value::Null,
+            error: Some(CapabilityError::new(
+                ErrorReason::PermissionDenied,
+                "Path traversal ('..') not allowed",
+            )),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 fn ok(data: Value) -> CapabilityResult {
     CapabilityResult {
         success: true,
@@ -345,6 +378,6 @@ fn err(msg: &str) -> CapabilityResult {
     CapabilityResult {
         success: false,
         data: Value::Null,
-        error: Some(CapabilityError::new(ErrorReason::InternalError, "msg")),
+        error: Some(CapabilityError::new(ErrorReason::InternalError, msg)),
     }
 }

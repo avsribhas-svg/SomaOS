@@ -2876,6 +2876,7 @@ dependencies = [
 name = "soma-cli"
 version = "0.2.0"
 dependencies = [
+ "serde",
  "serde_json",
  "soma-common",
  "tokio",

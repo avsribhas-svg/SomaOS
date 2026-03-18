@@ -48,7 +48,7 @@ impl LlmProvider for OpenAiProvider {
         // Build messages array
         let mut messages: Vec<Value> = vec![serde_json::json!({
             "role": "system",
-            "content": "You are an AI agent that controls a computer. Use the provided tools to complete the user's request. Always use tools — never reply with plain text."
+            "content": super::SYSTEM_PROMPT
         })];
 
         for (user, agent) in context {

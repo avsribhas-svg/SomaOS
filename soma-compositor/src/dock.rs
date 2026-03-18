@@ -60,6 +60,20 @@ impl Dock {
                     is_active: false,
                 },
                 DockApp {
+                    name: "Sheets".into(),
+                    icon_label: "Sh".into(),
+                    action: DockAction::OpenWindow(WindowContentType::Sheets),
+                    is_open: false,
+                    is_active: false,
+                },
+                DockApp {
+                    name: "Docs".into(),
+                    icon_label: "Dc".into(),
+                    action: DockAction::OpenWindow(WindowContentType::Docs),
+                    is_open: false,
+                    is_active: false,
+                },
+                DockApp {
                     name: "Settings".into(),
                     icon_label: "⚙".into(),
                     action: DockAction::OpenWindow(WindowContentType::Settings),
@@ -117,11 +131,14 @@ impl Dock {
         None
     }
 
-    /// Update open-state of Terminal and Browser apps based on the current window list.
+    /// Update open-state of all dock apps based on the current window list and mode flags.
     pub fn sync_open_state(
         &mut self,
         has_terminal: bool,
         has_browser: bool,
+        has_sheets: bool,
+        has_docs: bool,
+        has_settings: bool,
         agent_mode: bool,
         sidebar_visible: bool,
         private_mode: bool,
@@ -136,8 +153,16 @@ impl Dock {
                     app.is_open = has_browser;
                     app.is_active = false;
                 }
+                DockAction::OpenWindow(WindowContentType::Sheets) => {
+                    app.is_open = has_sheets;
+                    app.is_active = false;
+                }
+                DockAction::OpenWindow(WindowContentType::Docs) => {
+                    app.is_open = has_docs;
+                    app.is_active = false;
+                }
                 DockAction::OpenWindow(WindowContentType::Settings) => {
-                    app.is_open = false; // We will sync based on window existance below
+                    app.is_open = has_settings;
                     app.is_active = false;
                 }
                 DockAction::ToggleAgentMode => {

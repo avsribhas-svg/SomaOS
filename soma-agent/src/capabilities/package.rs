@@ -6,6 +6,23 @@ use super::{param, Capability};
 
 pub struct PackageCapability;
 
+/// Validate a package name or search query.
+/// Allows alphanumerics and common package name characters; rejects anything
+/// that could be interpreted as flags or shell metacharacters by package managers.
+fn validate_package_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() {
+        return Err("Package name must not be empty");
+    }
+    if name.starts_with('-') {
+        return Err("Package name must not start with '-' (looks like a flag)");
+    }
+    let all_valid = name.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '+' | ':' | '@' | '/'));
+    if !all_valid {
+        return Err("Package name contains invalid characters (allowed: alphanumeric, -, _, ., +, :, @, /)");
+    }
+    Ok(())
+}
+
 /// Detect the system's package manager
 fn detect_package_manager() -> Option<&'static str> {
     // Check in order of likelihood
@@ -153,6 +170,13 @@ fn execute_search(pm: &str, params: &Value) -> CapabilityResult {
             }
         }
     };
+    if let Err(e) = validate_package_name(query) {
+        return CapabilityResult {
+            success: false,
+            data: Value::Null,
+            error: Some(CapabilityError::new(ErrorReason::InvalidParam, e)),
+        };
+    }
 
     let output = match pm {
         "brew" => Command::new("brew").args(["search", query]).output(),
@@ -209,6 +233,13 @@ fn execute_install(pm: &str, params: &Value) -> CapabilityResult {
             }
         }
     };
+    if let Err(e) = validate_package_name(name) {
+        return CapabilityResult {
+            success: false,
+            data: Value::Null,
+            error: Some(CapabilityError::new(ErrorReason::InvalidParam, e)),
+        };
+    }
 
     let output = match pm {
         "brew" => Command::new("brew").args(["install", name]).output(),
@@ -264,6 +295,13 @@ fn execute_remove(pm: &str, params: &Value) -> CapabilityResult {
             }
         }
     };
+    if let Err(e) = validate_package_name(name) {
+        return CapabilityResult {
+            success: false,
+            data: Value::Null,
+            error: Some(CapabilityError::new(ErrorReason::InvalidParam, e)),
+        };
+    }
 
     let output = match pm {
         "brew" => Command::new("brew").args(["uninstall", name]).output(),

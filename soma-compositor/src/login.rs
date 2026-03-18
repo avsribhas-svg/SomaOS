@@ -63,7 +63,7 @@ impl LoginScreen {
 
     pub fn on_submit(&mut self) {
         let expected = read_password_file();
-        if self.input == expected {
+        if constant_time_eq(self.input.as_bytes(), expected.as_bytes()) {
             self.result = LoginResult::Granted;
         } else {
             self.attempts += 1;
@@ -132,4 +132,18 @@ fn read_password_file() -> String {
     std::fs::read_to_string(SOMA_PASSWD_FILE)
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| DEFAULT_PASSWORD.to_string())
+}
+
+/// Timing-safe byte comparison. Processes all bytes regardless of first mismatch
+/// to avoid leaking password length or content through response-time measurements.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let len = a.len().max(b.len());
+    // XOR lengths first: any difference makes result non-zero
+    let mut result = a.len() ^ b.len();
+    for i in 0..len {
+        let av = if i < a.len() { a[i] } else { 0 };
+        let bv = if i < b.len() { b[i] } else { 0 };
+        result |= (av ^ bv) as usize;
+    }
+    result == 0
 }

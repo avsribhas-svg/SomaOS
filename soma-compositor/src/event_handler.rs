@@ -11,7 +11,7 @@ use crate::desktop::MENU_BAR_H;
 use crate::dock::{Dock, DOCK_HEIGHT};
 use crate::settings_app;
 use crate::window_manager::{
-    FloatingWindow, WindowContent, WindowContentType, WindowId,
+    FloatingWindow, NativeAppContent, WindowContent, WindowContentType, WindowId,
 };
 use crate::compositor::Toast;
 use soma_common::CompositorMessage;
@@ -43,8 +43,14 @@ pub fn open_or_focus_window(
     }
     let content = match content_type {
         WindowContentType::Terminal => WindowContent::Terminal,
-        WindowContentType::Browser => WindowContent::Browser,
+        WindowContentType::Browser  => WindowContent::Browser,
         WindowContentType::Settings => WindowContent::Settings(settings_app::SettingsApp::new()),
+        WindowContentType::Sheets   => WindowContent::NativeApp(
+            Box::new(crate::sheets::SheetsApp::new("Sheet 1"))
+        ),
+        WindowContentType::Docs     => WindowContent::NativeApp(
+            Box::new(crate::docs::DocsApp::new("Untitled Document"))
+        ),
     };
     let id = *next_id;
     *next_id += 1;
@@ -130,8 +136,10 @@ pub fn handle_desktop_action(
             if parts.len() > 1 {
                 match parts[1] {
                     "terminal" => open_or_focus_window(windows, next_id, WindowContentType::Terminal, send, private_mode),
-                    "browser" => open_or_focus_window(windows, next_id, WindowContentType::Browser, send, private_mode),
+                    "browser"  => open_or_focus_window(windows, next_id, WindowContentType::Browser, send, private_mode),
                     "settings" => open_or_focus_window(windows, next_id, WindowContentType::Settings, send, private_mode),
+                    "sheets"   => open_or_focus_window(windows, next_id, WindowContentType::Sheets, send, private_mode),
+                    "docs"     => open_or_focus_window(windows, next_id, WindowContentType::Docs, send, private_mode),
                     _ => {}
                 }
             }
@@ -238,6 +246,8 @@ pub fn handle_mouse_click(
         let rel_y = my - MENU_BAR_H;
         if let Some(msg) = sidebar.on_settings_click(rel_x, rel_y) {
             send(msg);
+        } else if let Some(msg) = sidebar.on_registry_click_with_height(rel_y, sidebar_h) {
+            send(msg);
         } else {
             sidebar.on_sidebar_click(rel_x, rel_y, sidebar_h);
         }
@@ -285,14 +295,25 @@ pub fn handle_mouse_click(
                     }
                     *dragging_window = Some(id);
                 } else {
-                    // Content area click — route to Settings if applicable
+                    // Content area click — route to Settings or NativeApp
                     let rel_x = mx - win.x;
                     let rel_y = my - win.y - crate::window_manager::FloatingWindow::TITLE_BAR_H;
                     if let Some(w) = windows.last_mut() {
-                        if let WindowContent::Settings(ref mut s) = w.content {
-                            if let Some(msg) = s.on_click(rel_x, rel_y, w.width) {
-                                send(msg);
+                        match w.content {
+                            WindowContent::Settings(ref mut s) => {
+                                if let Some(msg) = s.on_click(rel_x, rel_y, w.width) {
+                                    send(msg);
+                                }
                             }
+                            WindowContent::NativeApp(ref mut app) => {
+                                if let Some(state) = app.on_click(rel_x, rel_y) {
+                                    send(CompositorMessage::AppStateChanged {
+                                        window_id: w.id,
+                                        state,
+                                    });
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -407,9 +428,82 @@ pub fn poll_agent_messages(
             soma_common::AgentMessage::ActivityUpdate { text } => {
                 *activity_text = text.clone();
             }
+            soma_common::AgentMessage::AppAction { window_id, action, params } => {
+                let (wid, act, prm) = (*window_id, action.clone(), params.clone());
+
+                if act == "create_and_populate" {
+                    // Agent wants to create a new NativeApp window (window_id == 0 sentinel).
+                    // Dispatch to Sheets or Docs based on the "app_type" param.
+                    let app_type = prm["app_type"].as_str().unwrap_or("sheets");
+                    let title_default = if app_type == "docs" { "Untitled Document" } else { "Sheet 1" };
+                    let title = prm["title"].as_str().unwrap_or(title_default).to_string();
+
+                    let mut app: Box<dyn NativeAppContent> = if app_type == "docs" {
+                        let mut a = Box::new(crate::docs::DocsApp::new(&title));
+                        if let Some(blocks) = prm["blocks"].as_array() {
+                            for block in blocks {
+                                a.execute_action("append_block", block);
+                            }
+                        }
+                        a
+                    } else {
+                        let mut a = Box::new(crate::sheets::SheetsApp::new(&title));
+                        if let Some(obj) = prm["cells"].as_object() {
+                            for (cell_ref, cell_val) in obj {
+                                let value_str = match cell_val {
+                                    serde_json::Value::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                };
+                                a.execute_action("write_cell", &serde_json::json!({
+                                    "cell": cell_ref,
+                                    "value": value_str,
+                                }));
+                            }
+                        }
+                        a
+                    };
+
+                    let state = app.describe_state();
+                    let new_id = *next_id;
+                    *next_id += 1;
+                    let offset = (windows.len() as f32 * 30.0) % 200.0;
+                    let mut win = FloatingWindow::new(
+                        new_id,
+                        WindowContent::NativeApp(app),
+                        80.0 + offset,
+                        crate::desktop::MENU_BAR_H + 20.0 + offset,
+                    );
+                    win.title = title;
+                    win.agent_owned = true;
+                    for w in windows.iter_mut() { w.is_focused = false; }
+                    win.is_focused = true;
+                    windows.push(win);
+
+                    // Push state back so agent cache gets the real window_id
+                    send(CompositorMessage::AppStateChanged { window_id: new_id, state });
+
+                    if !private_mode {
+                        send(CompositorMessage::DesktopEvent {
+                            event_type: "window_opened".to_string(),
+                            window_title: windows.last().map(|w| w.title.clone()).unwrap_or_default(),
+                            timestamp: unix_secs(),
+                        });
+                    }
+                } else if let Some(win) = windows.iter_mut().find(|w| w.id == wid) {
+                    if let WindowContent::NativeApp(ref mut app) = win.content {
+                        let result = app.execute_action(&act, &prm);
+                        if result.success {
+                            let state = app.describe_state();
+                            send(CompositorMessage::AppStateChanged { window_id: wid, state });
+                        }
+                    }
+                }
+            }
             _ => {}
         }
-        sidebar.handle_agent_message(msg);
+        if let Some(follow_up) = sidebar.handle_agent_message(msg) {
+            send(follow_up);
+        }
     }
     got_message
 }

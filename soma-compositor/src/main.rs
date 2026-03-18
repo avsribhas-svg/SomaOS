@@ -1,14 +1,17 @@
 mod backend;
 mod browser_panel;
 mod compositor;
+mod config_loader;
 mod desktop;
 mod dock;
+mod docs;
 mod event_handler;
 mod input;
 mod ipc_client;
 mod login;
 mod renderer;
 mod settings_app;
+mod sheets;
 mod sidebar;
 mod terminal;
 mod window_manager;
@@ -55,6 +58,8 @@ struct SomaApp {
     agent_tx: Option<ipc_client::AgentSender>,
     agent_rx: Option<Arc<Mutex<ipc_client::AgentReceiver>>>,
     runtime: tokio::runtime::Handle,
+    /// Counts up (seconds) when disconnected; attempt reconnect at 5s
+    reconnect_timer: f32,
     // Desktop window manager
     windows: Vec<window_manager::FloatingWindow>,
     next_window_id: WindowId,
@@ -87,6 +92,7 @@ impl SomaApp {
             agent_tx: None,
             agent_rx: None,
             runtime,
+            reconnect_timer: 0.0,
             windows: Vec::new(),
             next_window_id: 1,
             dock: dock::Dock::new(),
@@ -108,6 +114,8 @@ impl SomaApp {
         match rt.block_on(ipc_client::connect_to_agent()) {
             Ok((tx, rx)) => {
                 info!("Connected to soma-agent daemon");
+                // Prime the Registry tab with the current capability list
+                let _ = tx.send(CompositorMessage::ListCapabilities);
                 self.agent_tx = Some(tx);
                 self.agent_rx = Some(Arc::new(Mutex::new(rx)));
             }
@@ -161,6 +169,23 @@ impl SomaApp {
         let h = size.height as f32;
         let dt = 1.0 / 60.0;
 
+        // Detect agent disconnection and attempt reconnection every 5 seconds
+        let agent_disconnected = self.agent_tx.as_ref().map_or(true, |tx| tx.is_closed());
+        if agent_disconnected {
+            if self.agent_tx.is_some() {
+                info!("Agent connection lost — will retry in 5s");
+                self.agent_tx = None;
+                self.agent_rx = None;
+            }
+            self.reconnect_timer += dt;
+            if self.reconnect_timer >= 5.0 {
+                self.reconnect_timer = 0.0;
+                self.try_connect_agent();
+            }
+        } else {
+            self.reconnect_timer = 0.0;
+        }
+
         // Poll PTY
         let pty_data = self.terminal.poll();
 
@@ -173,7 +198,7 @@ impl SomaApp {
             &mut self.next_window_id, &mut self.agent_mode,
             &mut self.activity_text, &send, self.private_mode,
         );
-        drop(send);
+        let _ = send;
 
         // Per-frame update
         compositor::update(
@@ -308,8 +333,17 @@ impl ApplicationHandler for SomaApp {
                             if let Some(msg) = self.sidebar.on_submit() {
                                 self.send_to_agent(msg);
                             }
-                        } else if event_handler::focused_content_type(&self.windows) == Some(WindowContentType::Terminal) {
-                            self.terminal.on_submit();
+                        } else if let Some(win) = self.windows.iter_mut().find(|w| w.is_focused) {
+                            let win_id = win.id;
+                            match &mut win.content {
+                                WindowContent::Terminal => { self.terminal.on_submit(); }
+                                WindowContent::NativeApp(app) => {
+                                    if let Some(state) = app.on_key("Enter") {
+                                        self.send_to_agent(CompositorMessage::AppStateChanged { window_id: win_id, state });
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     Key::Named(NamedKey::Backspace) => {
@@ -319,18 +353,74 @@ impl ApplicationHandler for SomaApp {
                             match &mut win.content {
                                 WindowContent::Terminal => self.terminal.on_backspace(),
                                 WindowContent::Settings(s) => s.on_backspace(),
+                                WindowContent::NativeApp(app) => app.on_backspace(),
                                 _ => {}
                             }
                         }
                     }
+                    Key::Named(NamedKey::Tab) => {
+                        if let Some(win) = self.windows.iter_mut().find(|w| w.is_focused) {
+                            let win_id = win.id;
+                            if let WindowContent::NativeApp(app) = &mut win.content {
+                                if let Some(state) = app.on_key("Tab") {
+                                    self.send_to_agent(CompositorMessage::AppStateChanged { window_id: win_id, state });
+                                }
+                            }
+                        }
+                    }
+                    Key::Named(NamedKey::Escape) => {
+                        if let Some(win) = self.windows.iter_mut().find(|w| w.is_focused) {
+                            if let WindowContent::NativeApp(app) = &mut win.content {
+                                app.on_key("Escape");
+                            }
+                        }
+                    }
                     Key::Named(NamedKey::ArrowUp) => {
-                        if event_handler::focused_content_type(&self.windows) == Some(WindowContentType::Terminal) {
-                            self.terminal.on_key_up();
+                        if let Some(win) = self.windows.iter_mut().find(|w| w.is_focused) {
+                            let win_id = win.id;
+                            match &mut win.content {
+                                WindowContent::Terminal => self.terminal.on_key_up(),
+                                WindowContent::NativeApp(app) => {
+                                    if let Some(state) = app.on_key("ArrowUp") {
+                                        self.send_to_agent(CompositorMessage::AppStateChanged { window_id: win_id, state });
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     Key::Named(NamedKey::ArrowDown) => {
-                        if event_handler::focused_content_type(&self.windows) == Some(WindowContentType::Terminal) {
-                            self.terminal.on_key_down();
+                        if let Some(win) = self.windows.iter_mut().find(|w| w.is_focused) {
+                            let win_id = win.id;
+                            match &mut win.content {
+                                WindowContent::Terminal => self.terminal.on_key_down(),
+                                WindowContent::NativeApp(app) => {
+                                    if let Some(state) = app.on_key("ArrowDown") {
+                                        self.send_to_agent(CompositorMessage::AppStateChanged { window_id: win_id, state });
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Key::Named(NamedKey::ArrowLeft) => {
+                        if let Some(win) = self.windows.iter_mut().find(|w| w.is_focused) {
+                            let win_id = win.id;
+                            if let WindowContent::NativeApp(app) = &mut win.content {
+                                if let Some(state) = app.on_key("ArrowLeft") {
+                                    self.send_to_agent(CompositorMessage::AppStateChanged { window_id: win_id, state });
+                                }
+                            }
+                        }
+                    }
+                    Key::Named(NamedKey::ArrowRight) => {
+                        if let Some(win) = self.windows.iter_mut().find(|w| w.is_focused) {
+                            let win_id = win.id;
+                            if let WindowContent::NativeApp(app) = &mut win.content {
+                                if let Some(state) = app.on_key("ArrowRight") {
+                                    self.send_to_agent(CompositorMessage::AppStateChanged { window_id: win_id, state });
+                                }
+                            }
                         }
                     }
                     Key::Named(NamedKey::Space) => {
@@ -340,6 +430,7 @@ impl ApplicationHandler for SomaApp {
                             match &mut win.content {
                                 WindowContent::Terminal => self.terminal.on_char(' '),
                                 WindowContent::Settings(s) => s.on_char(' '),
+                                WindowContent::NativeApp(app) => app.on_char(' '),
                                 _ => {}
                             }
                         }
@@ -358,6 +449,7 @@ impl ApplicationHandler for SomaApp {
                             match &mut win.content {
                                 WindowContent::Terminal => { for ch in c.chars() { self.terminal.on_char(ch); } }
                                 WindowContent::Settings(s) => { for ch in c.chars() { s.on_char(ch); } }
+                                WindowContent::NativeApp(app) => { for ch in c.chars() { app.on_char(ch); } }
                                 _ => {}
                             }
                         }
@@ -504,6 +596,9 @@ fn drm_main(runtime: tokio::runtime::Handle) {
         if let Some(tx) = &agent_tx { let _ = tx.send(msg); }
     };
 
+    // Prime the Registry tab with the current capability list
+    send_msg(CompositorMessage::ListCapabilities);
+
     let target_frame = Duration::from_millis(16);
     let mut last = Instant::now();
 
@@ -559,15 +654,31 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                             send_msg(CompositorMessage::PrivateModeChanged { active: private_mode });
                         }
                         KeyCode::Tab => {
-                            if focused_is_terminal { terminal.on_tab(); }
+                            if focused_is_terminal {
+                                terminal.on_tab();
+                            } else if let Some(win) = windows.iter_mut().find(|w| w.is_focused) {
+                                if let WindowContent::NativeApp(app) = &mut win.content {
+                                    if let Some(state) = app.on_key("Tab") {
+                                        send_msg(CompositorMessage::AppStateChanged { window_id: win.id, state });
+                                    }
+                                }
+                            }
                         }
                         KeyCode::Enter => {
                             if sidebar_visible {
                                 if let Some(msg) = sidebar.on_submit() {
                                     send_msg(msg);
                                 }
-                            } else if focused_is_terminal {
-                                terminal.on_submit();
+                            } else if let Some(win) = windows.iter_mut().find(|w| w.is_focused) {
+                                match &mut win.content {
+                                    WindowContent::Terminal => terminal.on_submit(),
+                                    WindowContent::NativeApp(app) => {
+                                        if let Some(state) = app.on_key("Enter") {
+                                            send_msg(CompositorMessage::AppStateChanged { window_id: win.id, state });
+                                        }
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                         KeyCode::Backspace => {
@@ -576,6 +687,7 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                                 match &mut win.content {
                                     WindowContent::Terminal => terminal.on_backspace(),
                                     WindowContent::Settings(s) => s.on_backspace(),
+                                    WindowContent::NativeApp(app) => app.on_backspace(),
                                     _ => {}
                                 }
                             }
@@ -587,16 +699,39 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                                 send_msg(msg);
                             } else if sidebar_visible {
                                 sidebar_visible = false;
+                            } else if let Some(win) = windows.iter_mut().find(|w| w.is_focused) {
+                                if let WindowContent::NativeApp(app) = &mut win.content {
+                                    app.on_key("Escape");
+                                }
                             }
                         }
-                        KeyCode::ArrowUp => { if focused_is_terminal { terminal.on_key_up(); } }
-                        KeyCode::ArrowDown => { if focused_is_terminal { terminal.on_key_down(); } }
+                        KeyCode::ArrowUp => {
+                            if focused_is_terminal { terminal.on_key_up(); }
+                            else if let Some(win) = windows.iter_mut().find(|w| w.is_focused) {
+                                if let WindowContent::NativeApp(app) = &mut win.content {
+                                    if let Some(state) = app.on_key("ArrowUp") {
+                                        send_msg(CompositorMessage::AppStateChanged { window_id: win.id, state });
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::ArrowDown => {
+                            if focused_is_terminal { terminal.on_key_down(); }
+                            else if let Some(win) = windows.iter_mut().find(|w| w.is_focused) {
+                                if let WindowContent::NativeApp(app) = &mut win.content {
+                                    if let Some(state) = app.on_key("ArrowDown") {
+                                        send_msg(CompositorMessage::AppStateChanged { window_id: win.id, state });
+                                    }
+                                }
+                            }
+                        }
                         KeyCode::Space => {
                             if sidebar_visible { sidebar.on_char(' '); }
                             else if let Some(win) = windows.iter_mut().find(|w| w.is_focused) {
                                 match &mut win.content {
                                     WindowContent::Terminal => terminal.on_char(' '),
                                     WindowContent::Settings(s) => s.on_char(' '),
+                                    WindowContent::NativeApp(app) => app.on_char(' '),
                                     _ => {}
                                 }
                             }
@@ -607,6 +742,7 @@ fn drm_main(runtime: tokio::runtime::Handle) {
                                 match &mut win.content {
                                     WindowContent::Terminal => terminal.on_char(c),
                                     WindowContent::Settings(s) => s.on_char(c),
+                                    WindowContent::NativeApp(app) => app.on_char(c),
                                     _ => {}
                                 }
                             }

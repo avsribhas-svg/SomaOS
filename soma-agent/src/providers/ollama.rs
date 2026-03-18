@@ -43,7 +43,7 @@ impl LlmProvider for OllamaProvider {
         // System prompt
         messages.push(serde_json::json!({
             "role": "system",
-            "content": "You are an AI agent that controls a computer. Use the provided tools to complete the user's request. Always use tools — never reply with plain text."
+            "content": super::SYSTEM_PROMPT,
         }));
 
         // Conversation context
@@ -98,19 +98,35 @@ fn parse_tool_calls(data: &Value) -> Result<Vec<ToolCall>, String> {
         .and_then(|m| m.get("tool_calls"))
         .and_then(|tc| tc.as_array());
 
-    let Some(calls) = tool_calls else {
-        // Model replied without tool calls — extract text and return error
-        let text = data
-            .get("message")
-            .and_then(|m| m.get("content"))
-            .and_then(|c| c.as_str())
-            .unwrap_or("no tool calls returned");
-        return Err(format!(
-            "Model did not use tools. Try a model with tool support (llama3.1, qwen2.5, mistral-nemo). Reply: {}",
-            &text[..text.len().min(200)]
-        ));
-    };
+    if let Some(calls) = tool_calls {
+        if !calls.is_empty() {
+            return parse_native_tool_calls(calls);
+        }
+    }
 
+    // Fallback: model replied with plain text — try to parse it as a JSON tool call.
+    // qwen2.5-coder:7b often ignores the native tool-call API and replies with
+    // raw JSON like {"name": "capability__action", "params": {...}} or an array thereof.
+    let text = data
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+
+    if let Some(calls) = try_parse_text_as_tool_calls(text) {
+        if !calls.is_empty() {
+            log::info!("Ollama text-fallback: parsed {} tool call(s) from plain text", calls.len());
+            return Ok(calls);
+        }
+    }
+
+    Err(format!(
+        "Model did not use tools. Try a model with tool support (llama3.1, qwen2.5, mistral-nemo). Reply: {}",
+        &text[..text.len().min(200)]
+    ))
+}
+
+fn parse_native_tool_calls(calls: &[Value]) -> Result<Vec<ToolCall>, String> {
     let mut result = Vec::new();
     for call in calls {
         let name = call
@@ -132,12 +148,124 @@ fn parse_tool_calls(data: &Value) -> Result<Vec<ToolCall>, String> {
             other => other,
         };
 
-        result.push(ToolCall { name, arguments });
+        result.push(ToolCall { name: normalize_tool_name(&name), arguments });
     }
-
     if result.is_empty() {
         return Err("Model returned empty tool_calls array".to_string());
     }
-
     Ok(result)
+}
+
+/// Try to extract tool calls from a plain-text reply.
+/// Handles the common patterns qwen2.5-coder:7b uses:
+///   {"name": "cap__action", "params": {...}}
+///   {"name": "cap::action", "arguments": {...}}
+///   [{"name": ..., "params": ...}, ...]
+///   {"functions": [{"name": ..., "parameters": {...}}]}   ← model wraps in "functions" key
+fn try_parse_text_as_tool_calls(text: &str) -> Option<Vec<ToolCall>> {
+    // Find the first '[' or '{' to locate the JSON blob
+    let start = text.find(|c: char| c == '[' || c == '{')?;
+    let json_str = &text[start..];
+
+    // Try to parse as array first, then as single object
+    let parsed: Value = if json_str.starts_with('[') {
+        serde_json::from_str(json_str)
+            .or_else(|_| serde_json::from_str(&trim_to_balanced(json_str, '[', ']')))
+            .ok()?
+    } else {
+        serde_json::from_str(json_str)
+            .or_else(|_| serde_json::from_str(&trim_to_balanced(json_str, '{', '}')))
+            .ok()?
+    };
+
+    // Unwrap {"functions": [...]} or {"tools": [...]} wrapper patterns
+    let parsed = match &parsed {
+        Value::Object(map) => {
+            if let Some(inner) = map.get("functions").or_else(|| map.get("tools")) {
+                if inner.is_array() {
+                    inner.clone()
+                } else {
+                    parsed.clone()
+                }
+            } else {
+                parsed.clone()
+            }
+        }
+        _ => parsed.clone(),
+    };
+
+    let objects: Vec<Value> = match parsed {
+        Value::Array(arr) => arr,
+        obj @ Value::Object(_) => vec![obj],
+        _ => return None,
+    };
+
+    let mut calls = Vec::new();
+    for obj in &objects {
+        // Bare params inference: model returned just the args without a tool name.
+        // Detect by recognizable top-level keys.
+        if obj.get("name").is_none() {
+            if let Some(cells) = obj.get("cells") {
+                // cells JSON string → parse it first if needed
+                let cells = match cells {
+                    Value::String(s) => serde_json::from_str(s).unwrap_or(cells.clone()),
+                    other => other.clone(),
+                };
+                calls.push(ToolCall {
+                    name: "sheets__create".to_string(),
+                    arguments: serde_json::json!({ "title": "Sheet 1", "cells": cells }),
+                });
+                continue;
+            }
+            if let Some(blocks) = obj.get("blocks") {
+                if blocks.is_array() {
+                    calls.push(ToolCall {
+                        name: "docs__create".to_string(),
+                        arguments: serde_json::json!({ "title": "Untitled Document", "blocks": blocks }),
+                    });
+                    continue;
+                }
+            }
+            continue; // no name and no recognizable bare params — skip
+        }
+        let name = match obj.get("name").and_then(|n| n.as_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        // Accept capability__action or capability::action
+        let name = normalize_tool_name(name);
+        // Must look like a known namespace (contain __)
+        if !name.contains("__") {
+            continue; // skip invented names, don't abort the whole parse
+        }
+        // Arguments can be under "params", "parameters", "arguments", "args", or "kwargs"
+        let arguments = obj.get("params")
+            .or_else(|| obj.get("parameters"))
+            .or_else(|| obj.get("arguments"))
+            .or_else(|| obj.get("args"))
+            .or_else(|| obj.get("kwargs"))
+            .cloned()
+            .unwrap_or(Value::Object(Default::default()));
+
+        calls.push(ToolCall { name, arguments });
+    }
+
+    if calls.is_empty() { None } else { Some(calls) }
+}
+
+/// Normalize separator: capability::action → capability__action
+fn normalize_tool_name(name: &str) -> String {
+    name.replace("::", "__")
+}
+
+/// Trim a JSON string to its outermost balanced bracket pair.
+/// Handles truncated responses from the model.
+fn trim_to_balanced(s: &str, open: char, close: char) -> String {
+    let mut depth = 0i32;
+    let mut end = s.len();
+    for (i, c) in s.char_indices() {
+        if c == open  { depth += 1; }
+        if c == close { depth -= 1; if depth == 0 { end = i + 1; break; } }
+    }
+    s[..end].to_string()
 }

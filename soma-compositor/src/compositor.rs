@@ -67,12 +67,16 @@ pub fn update(
                 s.saved_toast -= dt;
             }
         }
+        // NativeApp: no per-frame decay needed (state driven by events)
     }
 
     // Sync dock open-state indicators
     let has_terminal = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Terminal));
-    let has_browser = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Browser));
-    dock.sync_open_state(has_terminal, has_browser, agent_mode, sidebar_visible, private_mode);
+    let has_browser  = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Browser));
+    let has_sheets   = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Sheets));
+    let has_docs     = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Docs));
+    let has_settings = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Settings));
+    dock.sync_open_state(has_terminal, has_browser, has_sheets, has_docs, has_settings, agent_mode, sidebar_visible, private_mode);
     dock.hovered_idx = dock.hit_test(mouse_x, mouse_y, w, h);
 
     // Init / drive sidebar slide
@@ -132,6 +136,9 @@ pub fn render(
             }
             WindowContent::Settings(ref s) => {
                 s.render(renderer, pixmap, cx, cy, cw, ch, sidebar.cursor_visible);
+            }
+            WindowContent::NativeApp(ref app) => {
+                app.render(renderer, pixmap, cx, cy, cw, ch, sidebar.cursor_visible);
             }
         }
     }

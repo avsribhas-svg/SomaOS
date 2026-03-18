@@ -1,5 +1,6 @@
 use log::{error, info, warn};
-use soma_common::{AgentMessage, CompositorMessage, TaskPlan, AGENT_SOCKET_PATH};
+use serde_json::json;
+use soma_common::{AgentMessage, AppState, CompositorMessage, TaskPlan, AGENT_SOCKET_PATH};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -15,17 +16,90 @@ use crate::observer::DesktopObserver;
 /// Pending plans awaiting user approval
 type PendingPlans = Arc<Mutex<HashMap<String, TaskPlan>>>;
 
+/// Shared cache of per-window app state pushed by the compositor
+pub type AppStateCache = Arc<std::sync::Mutex<HashMap<u32, AppState>>>;
+
 /// Conversation context — stores recent exchanges for follow-up resolution
 const MAX_CONTEXT_ENTRIES: usize = 5;
+/// Reject IPC messages larger than this to prevent memory exhaustion
+const MAX_MESSAGE_BYTES: usize = 1_048_576; // 1 MB
+
+// ── Session tracking ──────────────────────────────────────────────────────────
+
+struct SessionStep {
+    capability: String,
+    action: String,
+    success: bool,
+}
+
+struct Session {
+    id: String,
+    task: String,
+    started_at: std::time::SystemTime,
+    steps: Vec<SessionStep>,
+    affected_resources: Vec<String>,
+}
+
+impl Session {
+    fn new(task: &str) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            task: task.to_string(),
+            started_at: std::time::SystemTime::now(),
+            steps: Vec::new(),
+            affected_resources: Vec::new(),
+        }
+    }
+
+    fn persist(&self) {
+        let soma_dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+            .join(".soma/sessions");
+        let _ = std::fs::create_dir_all(&soma_dir);
+        let elapsed = self.started_at.elapsed().unwrap_or_default().as_secs();
+        let steps_json: Vec<serde_json::Value> = self.steps.iter().map(|s| json!({
+            "capability": s.capability,
+            "action": s.action,
+            "success": s.success,
+        })).collect();
+        let doc = json!({
+            "id": self.id,
+            "task": self.task,
+            "duration_secs": elapsed,
+            "steps": steps_json,
+            "affected_resources": self.affected_resources,
+        });
+        let path = soma_dir.join(format!("{}.json", self.id));
+        if let Ok(text) = serde_json::to_string_pretty(&doc) {
+            let _ = std::fs::write(path, text);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
     // Clean up old socket
     let _ = std::fs::remove_file(AGENT_SOCKET_PATH);
 
     let listener = UnixListener::bind(AGENT_SOCKET_PATH)?;
+
+    // Restrict socket to owner only — prevents other users on the system from
+    // connecting and issuing arbitrary capability commands.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            AGENT_SOCKET_PATH,
+            std::fs::Permissions::from_mode(0o600),
+        )?;
+    }
+
     info!("Agent daemon listening on {}", AGENT_SOCKET_PATH);
 
-    let registry = Arc::new(CapabilityRegistry::new());
+    // App-state cache shared across connections and with SheetsCapability
+    let app_state_cache: AppStateCache = Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+    let registry = Arc::new(CapabilityRegistry::new_with_cache(app_state_cache.clone()));
     let config = SomaConfig::load();
     info!("Loaded config: provider={} model={}", config.model.provider, config.model.model);
 
@@ -53,6 +127,7 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
         let executor = Arc::clone(&executor);
         let pending = Arc::clone(&pending);
         let observer = Arc::clone(&observer);
+        let app_state_cache = Arc::clone(&app_state_cache);
 
         tokio::spawn(async move {
             let (reader, writer) = stream.into_split();
@@ -62,6 +137,8 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
 
             // Per-client conversation context (pairs of user/agent strings)
             let mut context: Vec<(String, String)> = Vec::new();
+            // Per-client active session (started when agent mode begins)
+            let mut active_session: Option<Session> = None;
 
             loop {
                 line.clear();
@@ -73,6 +150,10 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(_) => {
                         let trimmed = line.trim();
                         if trimmed.is_empty() {
+                            continue;
+                        }
+                        if trimmed.len() > MAX_MESSAGE_BYTES {
+                            warn!("Dropping oversized IPC message ({} bytes)", trimmed.len());
                             continue;
                         }
 
@@ -87,6 +168,8 @@ pub async fn run_ipc_server() -> Result<(), Box<dyn std::error::Error>> {
                                     &observer,
                                     &writer,
                                     &mut context,
+                                    &app_state_cache,
+                                    &mut active_session,
                                 )
                                 .await;
                             }
@@ -114,6 +197,8 @@ async fn handle_message(
     observer: &Arc<Mutex<DesktopObserver>>,
     writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
     context: &mut Vec<(String, String)>,
+    app_state_cache: &AppStateCache,
+    active_session: &mut Option<Session>,
 ) {
     let response = match msg {
         CompositorMessage::NaturalLanguageInput { text } => {
@@ -201,9 +286,37 @@ async fn handle_message(
                         }
                     }
 
-                    // Forward desktop_agent results as IPC messages
-                    if step.capability == "desktop_agent" && result.success {
-                        forward_desktop_agent_result(&result, observer, writer).await;
+                    // Forward desktop_agent / sheets results as IPC messages
+                    if (step.capability == "desktop_agent" || step.capability == "sheets") && result.success {
+                        // Session lifecycle via ipc_message type
+                        let msg_type = result.data["ipc_message"].as_str().unwrap_or("");
+                        if msg_type == "AgentModeStarted" {
+                            let task = result.data["task"].as_str().unwrap_or("").to_string();
+                            *active_session = Some(Session::new(&task));
+                            info!("Session started: {}", task);
+                        } else if msg_type == "AgentModeEnded" {
+                            if let Some(session) = active_session.take() {
+                                let sid = session.id.clone();
+                                session.persist();
+                                info!("Session persisted: {}", sid);
+                            }
+                        }
+                        forward_ipc_command(&result, observer, writer).await;
+                    }
+
+                    // Session step recording
+                    if let Some(ref mut session) = active_session {
+                        session.steps.push(SessionStep {
+                            capability: step.capability.clone(),
+                            action: step.action.clone(),
+                            success: result.success,
+                        });
+                        // Record filesystem paths touched
+                        if step.capability == "filesystem" {
+                            if let Some(path) = result.data.get("path").and_then(|p| p.as_str()) {
+                                session.affected_resources.push(path.to_string());
+                            }
+                        }
                     }
 
                     results.push(result);
@@ -292,14 +405,35 @@ async fn handle_message(
             return;
         }
 
+        CompositorMessage::AppStateChanged { window_id, state } => {
+            info!("AppStateChanged: window={}", window_id);
+            app_state_cache.lock().unwrap().insert(window_id, state);
+            return; // No response needed
+        }
+
+        CompositorMessage::ReloadCapabilities => {
+            // The registry is Arc<CapabilityRegistry> (immutable shared ref in this handler).
+            // Full mutable hot-reload requires a RwLock refactor deferred to v1.3.
+            // For now, return the current count so the compositor registry tab can refresh.
+            let count = registry.list().len();
+            info!("ReloadCapabilities received — {} capabilities registered (reload takes effect on restart)", count);
+            AgentMessage::CapabilitiesReloaded { count }
+        }
+
+        CompositorMessage::QueryCapabilities => {
+            let capabilities = registry.list();
+            AgentMessage::Capabilities { capabilities }
+        }
+
         CompositorMessage::Ping => AgentMessage::Pong,
     };
 
     send_message(&response, writer).await;
 }
 
-/// Forward a desktop_agent capability result as a real IPC message to the compositor.
-async fn forward_desktop_agent_result(
+/// Forward a capability result that carries an `ipc_message` key as a real IPC message
+/// to the compositor. Handles desktop_agent and sheets command results.
+async fn forward_ipc_command(
     result: &soma_common::CapabilityResult,
     observer: &Arc<Mutex<DesktopObserver>>,
     writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
@@ -324,14 +458,18 @@ async fn forward_desktop_agent_result(
         }
         "GetWorkflowHistory" => {
             let history = observer.lock().await.get_history();
-            // Send the history back as a special step result (the caller will see it in data)
-            // For now, we just log it — the ExecutionComplete will contain the result
             info!("Workflow history: {}", &history[..history.len().min(200)]);
             None
         }
         "ActivityUpdate" => {
             let text = result.data["text"].as_str().unwrap_or("").to_string();
             Some(AgentMessage::ActivityUpdate { text })
+        }
+        "AppAction" => {
+            let window_id = result.data["window_id"].as_u64().unwrap_or(0) as u32;
+            let action = result.data["action"].as_str().unwrap_or("").to_string();
+            let params = result.data["params"].clone();
+            Some(AgentMessage::AppAction { window_id, action, params })
         }
         _ => None,
     };

@@ -1,5 +1,5 @@
 use base64::Engine as _;
-use soma_common::{AgentMessage, AgentStatus, CapabilityResult, CompositorMessage, TaskPlan, RiskLevel};
+use soma_common::{AgentMessage, AgentStatus, CapabilityInfo, CapabilityResult, CompositorMessage, TaskPlan, RiskLevel};
 use crate::renderer::Renderer;
 use tiny_skia::Pixmap;
 
@@ -11,6 +11,7 @@ use tiny_skia::Pixmap;
 pub enum SidebarTab {
     Chat,
     Settings,
+    Registry,
 }
 
 /// Which text field in the settings tab is focused for keyboard input
@@ -55,29 +56,7 @@ impl SettingsState {
     }
 }
 
-/// Read current config values from disk (compositor doesn't import soma-agent crate,
-/// so we parse the TOML directly).
-fn load_config_values() -> (String, String, String, String) {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    let path = std::path::PathBuf::from(home).join(".soma").join("config.toml");
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        if let Ok(val) = content.parse::<toml::Value>() {
-            let m = val.get("model");
-            let get = |key: &str| -> String {
-                m.and_then(|t| t.get(key)).and_then(|v| v.as_str()).unwrap_or("").to_string()
-            };
-            let provider = get("provider");
-            let provider = if provider.is_empty() { "ollama".to_string() } else { provider };
-            let model    = get("model");
-            let model    = if model.is_empty() { "qwen2.5-coder:7b".to_string() } else { model };
-            let api_key  = get("api_key");
-            let api_url  = get("api_url");
-            let api_url  = if api_url.is_empty() { "http://localhost:11434".to_string() } else { api_url };
-            return (provider, model, api_key, api_url);
-        }
-    }
-    ("ollama".to_string(), "qwen2.5-coder:7b".to_string(), String::new(), "http://localhost:11434".to_string())
-}
+use crate::config_loader::load_config_values;
 
 /// Sidebar panel width in pixels
 pub const SIDEBAR_WIDTH: f32 = 380.0;
@@ -139,6 +118,10 @@ pub struct Sidebar {
     pub slide_x: f32,
     /// Target x-offset (screen_w = hidden off-right, screen_w - SIDEBAR_WIDTH = visible)
     pub slide_target_x: f32,
+    /// Capability list for the Registry tab (populated from AgentMessage::Capabilities)
+    pub capabilities: Vec<CapabilityInfo>,
+    /// Scroll offset for the Registry tab
+    pub registry_scroll: f32,
 }
 
 impl Sidebar {
@@ -158,6 +141,8 @@ impl Sidebar {
             settings: SettingsState::new(),
             slide_x: f32::MAX,
             slide_target_x: f32::MAX,
+            capabilities: Vec::new(),
+            registry_scroll: 0.0,
         }
     }
 
@@ -170,6 +155,9 @@ impl Sidebar {
                 SettingsField::None   => {}
             }
             return;
+        }
+        if self.tab == SidebarTab::Registry {
+            return; // Registry tab has no text input
         }
         if matches!(self.status, AgentStatus::Idle | AgentStatus::Completed | AgentStatus::Error) {
             self.input_text.push(c);
@@ -186,11 +174,18 @@ impl Sidebar {
             }
             return;
         }
+        if self.tab == SidebarTab::Registry {
+            return; // Registry tab has no text input
+        }
         self.input_text.pop();
     }
 
     pub fn scroll(&mut self, delta: f32) {
-        self.scroll_offset = (self.scroll_offset - delta).max(0.0);
+        if self.tab == SidebarTab::Registry {
+            self.registry_scroll = (self.registry_scroll - delta).max(0.0);
+        } else {
+            self.scroll_offset = (self.scroll_offset - delta).max(0.0);
+        }
     }
 
     pub fn scroll_to_bottom(&mut self) {
@@ -234,7 +229,23 @@ impl Sidebar {
         } else { None }
     }
 
-    pub fn handle_agent_message(&mut self, msg: AgentMessage) {
+    pub fn handle_agent_message(&mut self, msg: AgentMessage) -> Option<CompositorMessage> {
+        match msg {
+            AgentMessage::Capabilities { capabilities } => {
+                self.capabilities = capabilities;
+                return None;
+            }
+            AgentMessage::CapabilitiesReloaded { .. } => {
+                // Ask agent for the fresh list now
+                return Some(CompositorMessage::QueryCapabilities);
+            }
+            _ => {}
+        }
+        self.handle_agent_message_inner(msg);
+        None
+    }
+
+    fn handle_agent_message_inner(&mut self, msg: AgentMessage) {
         match msg {
             AgentMessage::TaskPlanReady { id, plan } => {
                 self.messages.retain(|m| !matches!(m, ChatMessage::Thinking));
@@ -303,14 +314,22 @@ impl Sidebar {
     /// Returns an `UpdateConfig` message if the user clicked Save.
     pub fn on_settings_click(&mut self, rel_x: f32, rel_y: f32) -> Option<CompositorMessage> {
         // Tab bar: y=44..71 (44 tab_y + 26 tab_h + 1 separator)
+        // Three equal-width tabs: Chat | Settings | Registry
         if rel_y >= 44.0 && rel_y < 71.0 {
-            let half = SIDEBAR_WIDTH / 2.0;
-            if rel_x < half {
+            let third = SIDEBAR_WIDTH / 3.0;
+            if rel_x < third {
                 self.tab = SidebarTab::Chat;
-            } else {
+            } else if rel_x < third * 2.0 {
                 self.tab = SidebarTab::Settings;
+            } else {
+                self.tab = SidebarTab::Registry;
             }
             return None;
+        }
+
+        // Registry tab button handling
+        if self.tab == SidebarTab::Registry {
+            return self.on_registry_click(rel_y);
         }
 
         if self.tab != SidebarTab::Settings {
@@ -387,6 +406,35 @@ impl Sidebar {
             api_key:  self.settings.api_key_input.clone(),
             api_url:  self.settings.api_url_input.clone(),
         }
+    }
+
+    /// Handle a click in the Registry tab.
+    /// `rel_y` is relative to the sidebar top (including title/tab bar).
+    /// Returns a CompositorMessage if a button was clicked.
+    pub fn on_registry_click_with_height(&mut self, rel_y: f32, sidebar_height: f32) -> Option<CompositorMessage> {
+        // list_bottom = top_y + content_y_offset + (height - top_y - content_offset) - 74
+        // In relative coordinates: content starts at 71, list_bottom at height - 74 (absolute)
+        // But rel_y is relative to sidebar top. buttons are bottom-anchored.
+        let list_bottom_rel = sidebar_height - 74.0;
+        let reload_btn_y = list_bottom_rel + 4.0;
+        let gap_btn_y = reload_btn_y + 32.0;
+
+        if rel_y >= reload_btn_y && rel_y < reload_btn_y + 26.0 {
+            return Some(CompositorMessage::ReloadCapabilities);
+        }
+        if rel_y >= gap_btn_y && rel_y < gap_btn_y + 26.0 {
+            // Open terminal and run gap log — send a DirectExec for this
+            return Some(CompositorMessage::DirectExec {
+                id: "gap_log".to_string(),
+                command: "cat ~/.soma/gaps.log 2>/dev/null || echo '(no gaps logged yet)'".to_string(),
+            });
+        }
+        None
+    }
+
+    fn on_registry_click(&mut self, _rel_y: f32) -> Option<CompositorMessage> {
+        // Placeholder: callers that have height should use on_registry_click_with_height
+        None
     }
 
     /// Handle a click inside the sidebar panel.
@@ -595,6 +643,126 @@ impl Sidebar {
     }
 
     // ──────────────────────────────────────────────
+    //  Registry tab rendering
+    // ──────────────────────────────────────────────
+
+    fn render_registry_tab(
+        &self,
+        renderer: &mut Renderer,
+        pixmap: &mut Pixmap,
+        ox: f32,
+        content_y: f32,
+        height: f32,
+        t: &crate::renderer::Theme,
+    ) {
+        let w = SIDEBAR_WIDTH;
+        let row_h = 22.0;
+        let list_bottom = height - 74.0; // leave room for two bottom buttons
+
+        // Section header
+        let mut y = content_y + 10.0;
+        let cap_count = self.capabilities.len();
+        renderer.draw_text(
+            pixmap,
+            &format!("CAPABILITIES  ({} registered)", cap_count),
+            ox + 14.0, y, w - 28.0, 9.0, t.text_muted,
+        );
+        y += 18.0;
+
+        // Separator
+        renderer.fill_rect(pixmap, ox + 14.0, y, w - 28.0, 1.0, t.border);
+        y += 6.0;
+
+        // Scrollable capability list
+        let list_start_y = y;
+        let scroll = self.registry_scroll;
+
+        if self.capabilities.is_empty() {
+            renderer.draw_text(
+                pixmap,
+                "No capabilities loaded",
+                ox + 14.0, y + 10.0, w - 28.0, 9.5, t.text_muted,
+            );
+        } else {
+            let mut sorted = self.capabilities.clone();
+            sorted.sort_by(|a, b| a.name.cmp(&b.name));
+
+            let mut accumulated = 0.0_f32;
+            for cap in &sorted {
+                let row_y = list_start_y + accumulated - scroll;
+                accumulated += row_h;
+
+                // Clip to list viewport
+                if row_y + row_h < list_start_y { continue; }
+                if row_y > list_bottom { break; }
+
+                // Left accent bar for script caps; dim for built-in
+                let badge_color = if cap.is_builtin {
+                    [60, 60, 80, 255]
+                } else {
+                    t.accent
+                };
+                renderer.fill_rect(pixmap, ox, row_y, 2.0, row_h - 2.0, badge_color);
+
+                // Capability name
+                renderer.draw_text(
+                    pixmap,
+                    &cap.name,
+                    ox + 10.0, row_y + 4.0, w * 0.45, 9.5, t.text_primary,
+                );
+
+                // Version
+                renderer.draw_text(
+                    pixmap,
+                    &format!("v{}", cap.version),
+                    ox + w * 0.48, row_y + 4.0, w * 0.2, 8.5, t.text_muted,
+                );
+
+                // Action count
+                let action_label = format!("{}a", cap.actions.len());
+                renderer.draw_text(
+                    pixmap,
+                    &action_label,
+                    ox + w * 0.68, row_y + 4.0, w * 0.12, 8.5, t.text_secondary,
+                );
+
+                // built-in / script badge
+                let badge_text = if cap.is_builtin { "builtin" } else { "script" };
+                let badge_fg = if cap.is_builtin { t.text_muted } else { t.accent };
+                renderer.draw_text(
+                    pixmap,
+                    badge_text,
+                    ox + w * 0.80, row_y + 4.0, w * 0.18, 8.0, badge_fg,
+                );
+
+                // Row separator
+                renderer.fill_rect(pixmap, ox + 10.0, row_y + row_h - 1.0, w - 20.0, 1.0, [255, 255, 255, 8]);
+            }
+        }
+
+        // ── Bottom buttons ──
+        let btn_area_y = list_bottom + 4.0;
+
+        // "Reload Scripts" button
+        renderer.fill_rect(pixmap, ox + 14.0, btn_area_y, w - 28.0, 26.0, t.accent);
+        renderer.draw_text(
+            pixmap,
+            "Reload Scripts",
+            ox + w / 2.0 - 38.0, btn_area_y + 7.0, 90.0, 9.5, [255, 255, 255, 255],
+        );
+
+        // "Gap Log" button (secondary style)
+        let gap_btn_y = btn_area_y + 32.0;
+        renderer.fill_rect(pixmap, ox + 14.0, gap_btn_y, w - 28.0, 26.0, [255, 255, 255, 10]);
+        renderer.stroke_rect(pixmap, ox + 14.0, gap_btn_y, w - 28.0, 26.0, t.border);
+        renderer.draw_text(
+            pixmap,
+            "cat ~/.soma/gaps.log",
+            ox + w / 2.0 - 50.0, gap_btn_y + 7.0, 110.0, 8.5, t.text_secondary,
+        );
+    }
+
+    // ──────────────────────────────────────────────
     //  Rendering
     // ──────────────────────────────────────────────
 
@@ -637,29 +805,37 @@ impl Sidebar {
         
         renderer.draw_text(pixmap, &status_text, ox + w - 86.0, top_y + 18.0, 78.0, 11.0, status_color);
 
-        // ─── Tab Bar — VS Code editor tab style ───
+        // ─── Tab Bar — VS Code editor tab style (3 equal tabs) ───
         let tab_y = top_y + 44.0;
         let tab_h = 26.0;
-        let half = w / 2.0;
+        let third = w / 3.0;
         renderer.fill_rect(pixmap, ox, tab_y, w, tab_h, [0, 0, 0, 20]);
 
-        // Chat tab: active = solid bg with top border; inactive = transparent text
+        // Chat tab
         if self.tab == SidebarTab::Chat {
-            renderer.fill_rect(pixmap, ox, tab_y, half, tab_h, t.bg_sidebar);
-            renderer.fill_rect(pixmap, ox, tab_y, half, 1.0, t.accent); // top accent line
-            renderer.draw_text(pixmap, "Chat", ox + half / 2.0 - 14.0, tab_y + 8.0, 60.0, 10.0, t.text_primary);
+            renderer.fill_rect(pixmap, ox, tab_y, third, tab_h, t.bg_sidebar);
+            renderer.fill_rect(pixmap, ox, tab_y, third, 1.0, t.accent);
+            renderer.draw_text(pixmap, "Chat", ox + third / 2.0 - 14.0, tab_y + 8.0, 60.0, 10.0, t.text_primary);
         } else {
-            renderer.draw_text(pixmap, "Chat", ox + half / 2.0 - 14.0, tab_y + 8.0, 60.0, 10.0, t.text_muted);
+            renderer.draw_text(pixmap, "Chat", ox + third / 2.0 - 14.0, tab_y + 8.0, 60.0, 10.0, t.text_muted);
         }
-        // Separator between tabs
-        renderer.fill_rect(pixmap, ox + half, tab_y + 6.0, 1.0, tab_h - 12.0, t.border);
+        renderer.fill_rect(pixmap, ox + third, tab_y + 6.0, 1.0, tab_h - 12.0, t.border);
         // Settings tab
         if self.tab == SidebarTab::Settings {
-            renderer.fill_rect(pixmap, ox + half, tab_y, half, tab_h, t.bg_sidebar);
-            renderer.fill_rect(pixmap, ox + half, tab_y, half, 1.0, t.accent); // top accent line
-            renderer.draw_text(pixmap, "Settings", ox + half + half / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_primary);
+            renderer.fill_rect(pixmap, ox + third, tab_y, third, tab_h, t.bg_sidebar);
+            renderer.fill_rect(pixmap, ox + third, tab_y, third, 1.0, t.accent);
+            renderer.draw_text(pixmap, "Settings", ox + third + third / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_primary);
         } else {
-            renderer.draw_text(pixmap, "Settings", ox + half + half / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_muted);
+            renderer.draw_text(pixmap, "Settings", ox + third + third / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_muted);
+        }
+        renderer.fill_rect(pixmap, ox + third * 2.0, tab_y + 6.0, 1.0, tab_h - 12.0, t.border);
+        // Registry tab
+        if self.tab == SidebarTab::Registry {
+            renderer.fill_rect(pixmap, ox + third * 2.0, tab_y, third, tab_h, t.bg_sidebar);
+            renderer.fill_rect(pixmap, ox + third * 2.0, tab_y, third, 1.0, t.accent);
+            renderer.draw_text(pixmap, "Registry", ox + third * 2.0 + third / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_primary);
+        } else {
+            renderer.draw_text(pixmap, "Registry", ox + third * 2.0 + third / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_muted);
         }
         renderer.fill_rect(pixmap, ox, tab_y + tab_h, w, 1.0, t.border);
 
@@ -668,6 +844,11 @@ impl Sidebar {
 
         if self.tab == SidebarTab::Settings {
             self.render_settings_tab(renderer, pixmap, ox, content_y, top_y + height, &t);
+            return;
+        }
+
+        if self.tab == SidebarTab::Registry {
+            self.render_registry_tab(renderer, pixmap, ox, content_y, top_y + height, &t);
             return;
         }
 
@@ -967,8 +1148,9 @@ fn message_height(msg: &ChatMessage) -> f32 {
 }
 
 fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.len() > max_chars {
-        format!("{}...", &s[..max_chars])
+    if s.chars().count() > max_chars {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{}...", truncated)
     } else {
         s.to_string()
     }

@@ -2,7 +2,7 @@
 
 > **Living document.** Updated across agent sessions for cross-agent transparency. Any AI agent working on SomaOS should read this first.
 
-*Last updated: 2026-03-12 — post v1.0 desktop environment completion*
+*Last updated: 2026-03-15 — post v1.0.2 bug fix pass*
 
 ---
 
@@ -66,20 +66,10 @@ These four primitives are what separate "Linux + AI chat" from an OS genuinely b
 
 **Where it fits**: v1.1 (alongside AgentAPI). Agent sessions become first-class OS objects. The `AgentModeStarted { task }` message already carries intent — extend it with scope and tracking.
 
-### 2. Typed Failure
-**Current**: Capability errors are `{ success: false, error: Some("string") }`. Agent can't reason about recovery.
+### 2. Typed Failure ✅ DONE (v1.0.1)
+~~**Current**: Capability errors are `{ success: false, error: Some("string") }`. Agent can't reason about recovery.~~
 
-**Needed**: Structured error reasons:
-```rust
-pub struct CapabilityError {
-    pub reason: ErrorReason,      // PermissionDenied, NotFound, InvalidParams, etc.
-    pub context: String,          // "file is outside session scope"
-    pub alternatives: Vec<String>, // ["try /tmp/output.txt", "request elevated scope"]
-}
-```
-Agent can now programmatically decide: retry with different params, escalate via HITL, or try an alternative path.
-
-**Where it fits**: v1.0.1 (quick win, no architectural change). Update `CapabilityResult` in soma-common, update each capability's error returns.
+**Implemented**: `CapabilityError { reason: ErrorReason, context, alternatives }` in soma-common. All 11 capability modules migrated. Agent can programmatically decide: retry, escalate via HITL, or try an alternative path.
 
 ### 3. Semantic File System Layer
 **Current**: Files are bytes with names. Agent navigates by path.
@@ -111,11 +101,11 @@ Agent can then navigate by intent ("the spreadsheet I was working on yesterday")
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| ~~`main.rs` complexity (1,342 lines)~~ | ~~**High**~~ | ✅ Resolved v1.0.1 — extracted to compositor.rs + event_handler.rs; main.rs is ~712 lines |
+| ~~`main.rs` complexity (1,342 lines)~~ | ~~**High**~~ | ✅ Resolved v1.0.1 — extracted to compositor.rs + event_handler.rs; main.rs is 712 lines |
 | DynamicApp widget tree growing into a UI framework | Medium | Keep minimal: status surfaces for agent, not apps for humans |
 | AgentAPI `describe_state` design | **High** | Prototype with soma-sheets first; the answer shapes all future apps |
 | Concurrency: human + agent editing same data model | **High** | Design conflict resolution in v1.1 (cell-level locking? last-write-wins? operational transform?) |
-| Agent reliability on complex multi-step tasks | Medium | Native tool calling (v0.9.5) helps; session model will help more |
+| Agent reliability on complex multi-step tasks | Medium | Native tool calling helps; session model will help more |
 | No automated tests | Medium | Add at least capability unit tests before v1.2 |
 
 ---
@@ -125,8 +115,10 @@ Agent can then navigate by intent ("the spreadsheet I was working on yesterday")
 | Metric | Value | Assessment |
 |---|---|---|
 | Total workspace crates | 4 | Good separation |
-| soma-compositor/src/main.rs | ~712 lines | ✅ Extracted (v1.0.1) |
-| soma-agent capabilities | 13 modules | Healthy |
+| soma-compositor/src/main.rs | 712 lines | ✅ Extracted in v1.0.1 (was 1,342) |
+| soma-compositor modules | 16 files | compositor.rs, event_handler.rs, settings_app.rs, config_loader.rs, sheets.rs, docs.rs added |
+| soma-agent capabilities | 13 modules (incl. docs, semantic_fs, sheets) | Healthy — typed errors on all modules |
+| IPC reconnection | ✅ | Compositor detects `tx.is_closed()`, retries every 5s |
 | IPC message variants | 13 compositor→agent, 13 agent→compositor | Clean protocol |
 | Feature-gated backends | 2 (winit, drm) | Good architecture |
 | Test coverage | 0% | ⚠️ No tests at all |
@@ -137,8 +129,9 @@ Agent can then navigate by intent ("the spreadsheet I was working on yesterday")
 
 ```
 v1.0    ━━━━━━━━━━━━━━━━━━━  DONE   Desktop shell (shared environment)
-v1.0.1  ━━━━━━               NEXT   main.rs split + typed failure
-v1.1    ━━━━━━━━━━━━━━━━━━━          AgentAPI + soma-sheets + session model
+v1.0.1  ━━━━━━               DONE   main.rs split + typed failure
+v1.0.2  ━━━━━━               DONE   Bug fix pass (dock, UTF-8, IPC reconnect, shared config loader)
+v1.1    ━━━━━━━━━━━━━━━━━━━  NEXT   AgentAPI + soma-sheets + session model
 v1.2    ━━━━━━━━━━━━━━                soma-docs + governance + semantic FS
 v1.3    ━━━━━━━━━━━━                  soma-media + parallel tasks
 v1.4    ━━━━━━━━━━                    Federation

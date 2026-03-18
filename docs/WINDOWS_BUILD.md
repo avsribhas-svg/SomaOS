@@ -4,6 +4,26 @@ Complete guide for building the SomaOS v1.0.1 image inside WSL2 and running it a
 
 ---
 
+> For a full local CI workflow and Mac build instructions, see [LOCAL_CI.md](LOCAL_CI.md).
+
+---
+
+## Getting a Pre-Built Image
+
+You don't have to build from scratch. Two options:
+
+**Option A — GitHub Actions artifact** (when CI minutes are available):
+1. Go to the repo → **Actions** → latest successful run on `main`
+2. Download the `soma-os-x86_64-<sha>` artifact (contains `soma-os.img.gz` + `kernel`)
+3. Decompress inside WSL2: `gunzip soma-os.img.gz`
+4. Copy to Windows Desktop: `cp soma-os.img /mnt/c/Users/$USER/Desktop/soma-os.img`
+5. Proceed to Step 3 (Convert to VDI) below
+
+**Option B — Build locally** (always available, no CI minutes needed):
+Follow Steps 1–2 below. Everything runs inside Docker in WSL2 — no native Linux toolchain needed.
+
+---
+
 ## Overview
 
 The build runs entirely inside **WSL2** (where Docker is already set up). The output is a `.vdi` disk image you import into VirtualBox as a brand new VM.

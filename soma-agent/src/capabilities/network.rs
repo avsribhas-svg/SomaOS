@@ -348,12 +348,12 @@ fn execute_port_check(params: &Value) -> CapabilityResult {
     let addr = format!("{}:{}", host, port);
     let is_open = TcpStream::connect_timeout(
         &addr.parse().unwrap_or_else(|_| {
-            // Fallback: try resolving
+            // Fallback: try resolving via ToSocketAddrs
             use std::net::ToSocketAddrs;
             addr.to_socket_addrs()
                 .ok()
                 .and_then(|mut addrs| addrs.next())
-                .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap())
+                .unwrap_or_else(|| "0.0.0.0:0".parse().expect("hardcoded valid socket address"))
         }),
         Duration::from_secs(3),
     )

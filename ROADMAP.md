@@ -73,21 +73,28 @@
 - Multi-provider LLM brain: native tool calling across Ollama, Anthropic, OpenAI, Gemini
 - 36 built-in capability actions across 10 modules (filesystem, process, system, network, package, browser, vision, meta, desktop_agent, + user-defined)
 
+### v1.0.1 — Compositor Extraction + Typed Failure
+
+- `event_handler.rs` extracted — all keyboard/mouse/scroll input dispatch
+- `compositor.rs` extracted — 9-layer render stack + animation/state sync
+- `settings_app.rs` extracted — settings floating window UI
+- `main.rs` shrunk from ~1,340 → 712 lines
+- `CapabilityError { reason, context, alternatives }` — structured typed errors across all 11 capability modules; replaces raw strings
+- Agent can programmatically reason about failure: retry, escalate via HITL, or try an alternative path
+
+### v1.0.2 — Bug Fixes + Code Health
+
+- **Settings dock indicator**: Settings window `is_open` dot now correctly syncs via `has_settings` param
+- **UTF-8 safety**: `truncate_str` switched from byte-index to char-based truncation (was a panic risk on multi-byte characters)
+- **Terminal**: `CString::new().unwrap()` in PTY spawn replaced with graceful `/bin/sh` fallback; version string updated to v1.0
+- **IPC reconnection**: Compositor now detects agent disconnection via `tx.is_closed()` and retries every 5 seconds automatically
+- **Observer save errors**: `DesktopObserver::save()` now logs `warn!` on `create_dir_all` or `write` failure instead of silently swallowing errors
+- **Shared config loader**: Duplicate `load_config_values()` extracted to `config_loader.rs`; both `sidebar.rs` and `settings_app.rs` now import it
+- **Nested unwraps**: Replaced silent `.unwrap()` on hardcoded CSS selectors (browser.rs) and socket address (network.rs) with descriptive `.expect()`
+
 ---
 
 ## Planned
-
-### v1.0.1 — Compositor Extraction + Typed Failure
-
-`main.rs` is ~1,340 lines owning the event loop, render stack, input dispatch, and IPC polling. Extract before adding AgentAPI plumbing:
-- `event_handler.rs` — keyboard/mouse/scroll input handling
-- `compositor.rs` — 9-layer render stack + animation/state sync
-- `main.rs` shrinks to ~300 lines: struct, helpers, thin event loops
-
-**Agent-native primitive: Typed Failure**
-- Replace string errors in `CapabilityResult` with structured `CapabilityError { reason, context, alternatives }`
-- Agent can programmatically reason about recovery: retry with different params, escalate via HITL, or try an alternative
-- Quick win — no architectural change, just update `CapabilityResult` in soma-common and each capability's error returns
 
 ### v1.1 — AgentAPI + soma-sheets + Session Model ← THESIS MILESTONE
 

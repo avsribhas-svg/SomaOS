@@ -1,0 +1,501 @@
+[
+  {
+    "id": "disk_check",
+    "prompt": "how much disk space is free",
+    "expect_capability": "system",
+    "expect_action": "disk_usage",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "disk_check_alt",
+    "prompt": "is the drive getting full",
+    "expect_capability": "system",
+    "expect_action": "disk_usage",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "disk_check_usage",
+    "prompt": "show disk usage",
+    "expect_capability": "system",
+    "expect_action": "disk_usage",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "memory_check",
+    "prompt": "show memory usage",
+    "expect_capability": "system",
+    "expect_action": "memory_info",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "memory_check_alt",
+    "prompt": "how much RAM is free",
+    "expect_capability": "system",
+    "expect_action": "memory_info",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "memory_check_eating",
+    "prompt": "what is eating my memory",
+    "expect_capability": "system",
+    "expect_action": "memory_info",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "uptime_check",
+    "prompt": "how long has the system been running",
+    "expect_capability": "system",
+    "expect_action": "uptime",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "uptime_check_alt",
+    "prompt": "show uptime",
+    "expect_capability": "system",
+    "expect_action": "uptime",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "hostname_check",
+    "prompt": "what is this machine's hostname",
+    "expect_capability": "system",
+    "expect_action": "hostname",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "hostname_check_alt",
+    "prompt": "what is the computer name",
+    "expect_capability": "system",
+    "expect_action": "hostname",
+    "auto_approve": true,
+    "timeout_secs": 30
+  },
+  {
+    "id": "process_list",
+    "prompt": "show me all running processes",
+    "expect_capability": "process",
+    "expect_action": "list_processes",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "process_list_alt",
+    "prompt": "list processes",
+    "expect_capability": "process",
+    "expect_action": "list_processes",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "sheets_create",
+    "prompt": "create a Q1 budget spreadsheet with monthly revenue, expenses, and profit data",
+    "expect_capability": "sheets",
+    "expect_action": "create",
+    "auto_approve": true,
+    "timeout_secs": 120
+  },
+  {
+    "id": "sheets_create_alt",
+    "prompt": "make a new spreadsheet",
+    "expect_capability": "sheets",
+    "expect_action": "create",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "docs_create",
+    "prompt": "create a Q1 executive summary document with a heading, overview paragraph, and key metrics",
+    "expect_capability": "docs",
+    "expect_action": "create",
+    "auto_approve": true,
+    "timeout_secs": 120
+  },
+  {
+    "id": "docs_create_alt",
+    "prompt": "write a new document about Q2 performance",
+    "expect_capability": "docs",
+    "expect_action": "create",
+    "auto_approve": false,
+    "timeout_secs": 90
+  },
+  {
+    "id": "list_files",
+    "prompt": "list files in /tmp",
+    "expect_capability": "filesystem",
+    "expect_action": "list_dir",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "list_files_home",
+    "prompt": "what files are in my home directory",
+    "expect_capability": "filesystem",
+    "expect_action": "list_dir",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "read_file_hosts",
+    "prompt": "read the file /etc/hosts",
+    "expect_capability": "filesystem",
+    "expect_action": "read_file",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "file_info_tmp",
+    "prompt": "show file info for /tmp",
+    "expect_capability": "filesystem",
+    "expect_action": "file_info",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "find_json_files",
+    "prompt": "find all .json files in /tmp",
+    "expect_capability": "filesystem",
+    "expect_action": "find",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "find_log_files",
+    "prompt": "find all log files in /var/log",
+    "expect_capability": "filesystem",
+    "expect_action": "find",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "write_file",
+    "prompt": "write 'hello from soma test' to /tmp/soma-test-write.txt",
+    "expect_capability": "filesystem",
+    "expect_action": "write_file",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "create_dir",
+    "prompt": "create a directory at /tmp/soma-test-dir",
+    "expect_capability": "filesystem",
+    "expect_action": "create_dir",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "copy_file",
+    "prompt": "copy /etc/hosts to /tmp/soma-hosts-copy.txt",
+    "expect_capability": "filesystem",
+    "expect_action": "copy",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "delete_file_intent",
+    "prompt": "delete the file /tmp/soma-test-write.txt",
+    "expect_capability": "filesystem",
+    "expect_action": "delete",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "kernel_info",
+    "prompt": "show kernel version",
+    "expect_capability": "system",
+    "expect_action": "kernel_info",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "network_status_sys",
+    "prompt": "show network interface status",
+    "expect_capability": "system",
+    "expect_action": "network_status",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "process_kill_intent",
+    "prompt": "kill process with PID 99999",
+    "expect_capability": "process",
+    "expect_action": "kill_process",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "service_list_intent",
+    "prompt": "list all system services",
+    "expect_capability": "process",
+    "expect_action": "service_list",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "service_status_intent",
+    "prompt": "check the status of the ssh service",
+    "expect_capability": "process",
+    "expect_action": "service_status",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "network_ping_intent",
+    "prompt": "ping google.com",
+    "expect_capability": "network",
+    "expect_action": "ping",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "network_dns_intent",
+    "prompt": "look up the DNS record for github.com",
+    "expect_capability": "network",
+    "expect_action": "dns_lookup",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "network_curl_intent",
+    "prompt": "fetch the contents of https://example.com",
+    "expect_capability": "network",
+    "expect_action": "curl",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "network_port_intent",
+    "prompt": "check if port 443 is open on github.com",
+    "expect_capability": "network",
+    "expect_action": "port_check",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "package_list",
+    "prompt": "list all installed packages",
+    "expect_capability": "package",
+    "expect_action": "list_installed",
+    "auto_approve": true,
+    "timeout_secs": 90
+  },
+  {
+    "id": "package_search_intent",
+    "prompt": "search for the curl package",
+    "expect_capability": "package",
+    "expect_action": "search",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "package_install_intent",
+    "prompt": "install the htop package",
+    "expect_capability": "package",
+    "expect_action": "install",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "browser_navigate_intent",
+    "prompt": "open github.com in the browser",
+    "expect_capability": "browser",
+    "expect_action": "navigate",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "browser_search_intent",
+    "prompt": "search the web for Rust async programming",
+    "expect_capability": "browser",
+    "expect_action": "search",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "browser_screenshot_intent",
+    "prompt": "take a screenshot of the current browser page",
+    "expect_capability": "browser",
+    "expect_action": "screenshot",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "semantic_tag",
+    "prompt": "tag the file /tmp/report.txt with the label 'quarterly-report' and description 'Q1 financial report'",
+    "expect_capability": "semantic_fs",
+    "expect_action": "tag",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "semantic_annotate_intent",
+    "prompt": "annotate /tmp/soma-hosts-copy.txt with the note 'test copy created by soma agent'",
+    "expect_capability": "semantic_fs",
+    "expect_action": "annotate",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "semantic_find_intent",
+    "prompt": "find all files with semantic tag quarterly-report",
+    "expect_capability": "semantic_fs",
+    "expect_action": "find_by_intent",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "semantic_list_tagged_intent",
+    "prompt": "list all files that have been tagged in the semantic filesystem",
+    "expect_capability": "semantic_fs",
+    "expect_action": "list_tagged",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "semantic_describe_intent",
+    "prompt": "show the semantic metadata for /tmp/report.txt",
+    "expect_capability": "semantic_fs",
+    "expect_action": "describe_file",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "sheets_write_intent",
+    "prompt": "set cell B3 to 9999 in the spreadsheet window",
+    "expect_capability": "sheets",
+    "expect_action": "write_cell",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "sheets_read_intent",
+    "prompt": "read the range A1 to D5 from the open spreadsheet",
+    "expect_capability": "sheets",
+    "expect_action": "read_range",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "sheets_formula_intent",
+    "prompt": "apply the formula =SUM(A2:A4) to cell A5 in the spreadsheet",
+    "expect_capability": "sheets",
+    "expect_action": "apply_formula",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "sheets_describe_intent",
+    "prompt": "describe the current state of the open spreadsheet",
+    "expect_capability": "sheets",
+    "expect_action": "describe",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "docs_append_intent",
+    "prompt": "add a paragraph to the open document saying Q2 results exceeded expectations",
+    "expect_capability": "docs",
+    "expect_action": "append_block",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "docs_write_block_intent",
+    "prompt": "update the heading in the document to say Annual Review 2026",
+    "expect_capability": "docs",
+    "expect_action": "write_block",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "docs_describe_intent",
+    "prompt": "describe the open document",
+    "expect_capability": "docs",
+    "expect_action": "describe",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "desktop_spawn_terminal",
+    "prompt": "open the terminal app",
+    "expect_capability": "desktop_agent",
+    "expect_action": "spawn_app",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "desktop_spawn_browser",
+    "prompt": "open the browser window",
+    "expect_capability": "desktop_agent",
+    "expect_action": "spawn_app",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "desktop_start_agent_mode_intent",
+    "prompt": "start agent mode to help me organize my files",
+    "expect_capability": "desktop_agent",
+    "expect_action": "start_agent_mode",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "desktop_workflow_history_intent",
+    "prompt": "show my recent workflow history",
+    "expect_capability": "desktop_agent",
+    "expect_action": "get_workflow_history",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "meta_list_proposed",
+    "prompt": "list all proposed capabilities",
+    "expect_capability": "meta",
+    "expect_action": "list_proposed",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "meta_describe_gap",
+    "prompt": "log that there is no capability for sending emails",
+    "expect_capability": "meta",
+    "expect_action": "describe_gap",
+    "auto_approve": true,
+    "timeout_secs": 60
+  },
+  {
+    "id": "meta_propose_intent",
+    "prompt": "propose a new capability for sending Slack messages",
+    "expect_capability": "meta",
+    "expect_action": "propose",
+    "auto_approve": false,
+    "timeout_secs": 90
+  },
+  {
+    "id": "caps_parse",
+    "prompt": "what can you do",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "help_me",
+    "prompt": "help",
+    "auto_approve": false,
+    "timeout_secs": 60
+  },
+  {
+    "id": "open_ended_system",
+    "prompt": "give me a full system status report",
+    "expect_capability": "system",
+    "auto_approve": true,
+    "timeout_secs": 90
+  }
+]

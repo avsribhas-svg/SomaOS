@@ -58,7 +58,7 @@ impl LlmProvider for GeminiProvider {
 
         let body = serde_json::json!({
             "system_instruction": {
-                "parts": [{ "text": "You are an AI agent that controls a computer. Use the provided tools to complete the user's request. Always use tools — never reply with plain text." }]
+                "parts": [{ "text": super::SYSTEM_PROMPT }]
             },
             "contents": contents,
             "tools": [{ "function_declarations": function_declarations }],

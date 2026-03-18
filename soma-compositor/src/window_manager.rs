@@ -4,9 +4,14 @@
 //! `FloatingWindow`. The compositor owns one `Terminal` and one `BrowserPanel`
 //! instance; `WindowContent` is a discriminant tag used to route rendering
 //! and input — it does NOT own the component by value.
+//!
+//! v1.1 adds `NativeApp(Box<dyn NativeAppContent>)` — dual-interface apps
+//! that expose both a good GUI for humans and a structured AgentAPI for agents.
 
 use crate::renderer::Renderer;
 use tiny_skia::Pixmap;
+use soma_common::{AppState, CapabilityResult};
+use serde_json::Value;
 
 pub type WindowId = u32;
 
@@ -72,18 +77,64 @@ impl AppDef {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  NativeAppContent trait — v1.1 AgentAPI for dual-interface apps
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Implemented by dual-interface apps (e.g. SheetsApp).
+/// Combines GUI rendering with the AgentAPI contract so both the human
+/// and agent co-inhabit the same data model.
+///
+/// Methods that modify state return `Option<AppState>` — `Some(state)` signals
+/// that the compositor should emit `AppStateChanged` to the agent.
+pub trait NativeAppContent: Send + Sync {
+    /// Compact summary + full cell data snapshot (for agent cache).
+    fn describe_state(&self) -> AppState;
+    /// Agent-side action (write_cell, apply_formula, read_range, append_block, etc.).
+    fn execute_action(&mut self, action: &str, params: &Value) -> CapabilityResult;
+    /// Render the app into the content area.
+    fn render(&self, renderer: &mut Renderer, pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, cursor_visible: bool);
+    /// A printable character was typed while this window is focused.
+    fn on_char(&mut self, c: char);
+    /// Backspace was pressed.
+    fn on_backspace(&mut self);
+    /// Named key: "Tab", "Enter", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight".
+    /// Returns Some(state) if state changed (compositor should emit AppStateChanged).
+    fn on_key(&mut self, key: &str) -> Option<AppState>;
+    /// Mouse click at content-relative coordinates.
+    /// Returns Some(state) if state changed.
+    fn on_click(&mut self, rel_x: f32, rel_y: f32) -> Option<AppState>;
+    /// Returns the WindowContentType for this app (used for dock sync).
+    fn content_type_id(&self) -> WindowContentType;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  WindowContent discriminant
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Tags the kind of content a FloatingWindow shows.
 /// Terminal and Browser map to singleton components on AppState.
 /// DynamicApp carries its own widget tree.
-#[derive(Debug, Clone)]
+/// NativeApp carries a dual-interface app (human GUI + AgentAPI).
 pub enum WindowContent {
     Terminal,
     Browser,
     DynamicApp(AppDef),
     Settings(crate::settings_app::SettingsApp),
+    /// v1.1: dual-interface app (e.g. SheetsApp)
+    NativeApp(Box<dyn NativeAppContent>),
+}
+
+// Manual Debug impl since Box<dyn NativeAppContent> doesn't derive Debug
+impl std::fmt::Debug for WindowContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WindowContent::Terminal => write!(f, "Terminal"),
+            WindowContent::Browser => write!(f, "Browser"),
+            WindowContent::DynamicApp(d) => write!(f, "DynamicApp({})", d.app_id),
+            WindowContent::Settings(_) => write!(f, "Settings"),
+            WindowContent::NativeApp(_) => write!(f, "NativeApp"),
+        }
+    }
 }
 
 /// Subset tag for use in Dock (no heap data).
@@ -92,6 +143,8 @@ pub enum WindowContentType {
     Terminal,
     Browser,
     Settings,
+    Sheets,
+    Docs,
 }
 
 impl WindowContent {
@@ -101,6 +154,7 @@ impl WindowContent {
             WindowContent::Browser  => Some(WindowContentType::Browser),
             WindowContent::DynamicApp(_) => None,
             WindowContent::Settings(_) => Some(WindowContentType::Settings),
+            WindowContent::NativeApp(ref app) => Some(app.content_type_id()),
         }
     }
 }
@@ -134,10 +188,14 @@ impl FloatingWindow {
 
     pub fn new(id: WindowId, content: WindowContent, x: f32, y: f32) -> Self {
         let (title, width, height) = match &content {
-            WindowContent::Terminal      => ("Terminal".to_string(), 780.0, 480.0),
-            WindowContent::Browser       => ("Browser".to_string(),  960.0, 620.0),
-            WindowContent::DynamicApp(d) => (d.app_id.clone(),       480.0, 360.0),
+            WindowContent::Terminal      => ("Terminal".to_string(),       780.0, 480.0),
+            WindowContent::Browser       => ("Browser".to_string(),        960.0, 620.0),
+            WindowContent::DynamicApp(d) => (d.app_id.clone(),             480.0, 360.0),
             WindowContent::Settings(_)   => ("System Settings".to_string(), 380.0, 420.0),
+            WindowContent::NativeApp(ref app) => match app.content_type_id() {
+                WindowContentType::Docs => ("Untitled Document".to_string(), 720.0, 520.0),
+                _                       => ("Soma Sheets".to_string(),       960.0, 560.0),
+            },
         };
         let agent_owned = matches!(content, WindowContent::DynamicApp(_));
         Self {

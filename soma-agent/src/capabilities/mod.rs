@@ -4,14 +4,34 @@ use std::collections::HashMap;
 
 pub mod browser;
 pub mod desktop_agent;
+pub mod docs;
 pub mod filesystem;
 pub mod meta;
 pub mod network;
 pub mod package;
 pub mod process;
 pub mod script;
+pub mod semantic_fs;
+pub mod sheets;
 pub mod system;
 pub mod vision;
+
+/// Hardcoded list of built-in capability names.
+/// Any capability whose name is NOT in this list is considered a ScriptCapability.
+const BUILTIN_NAMES: &[&str] = &[
+    "filesystem",
+    "process",
+    "system",
+    "network",
+    "package",
+    "browser",
+    "vision",
+    "meta",
+    "desktop_agent",
+    "sheets",
+    "docs",
+    "semantic_fs",
+];
 
 /// Trait that all capabilities must implement
 pub trait Capability: Send + Sync {
@@ -20,6 +40,9 @@ pub trait Capability: Send + Sync {
 
     /// Human-readable description
     fn description(&self) -> &str;
+
+    /// Semver version string — built-ins return "1.0.0" by default
+    fn version(&self) -> &str { "1.0.0" }
 
     /// List of actions this capability supports
     fn actions(&self) -> Vec<ActionSchema>;
@@ -35,6 +58,10 @@ pub struct CapabilityRegistry {
 
 impl CapabilityRegistry {
     pub fn new() -> Self {
+        Self::new_with_cache(crate::ipc::AppStateCache::default())
+    }
+
+    pub fn new_with_cache(state_cache: crate::ipc::AppStateCache) -> Self {
         let mut registry = Self {
             capabilities: HashMap::new(),
         };
@@ -49,9 +76,12 @@ impl CapabilityRegistry {
         registry.register(Box::new(vision::VisionCapability));
         registry.register(Box::new(meta::MetaCapability));
         registry.register(Box::new(desktop_agent::DesktopAgentCapability));
+        registry.register(Box::new(sheets::SheetsCapability::new(state_cache.clone())));
+        registry.register(Box::new(docs::DocsCapability::new(state_cache)));
+        registry.register(Box::new(semantic_fs::SemanticFsCapability));
 
         // Load any user-proposed capabilities from ~/.soma/capabilities/
-        registry.load_user_capabilities();
+        load_script_capabilities(&mut registry.capabilities);
 
         registry
     }
@@ -60,26 +90,19 @@ impl CapabilityRegistry {
         self.capabilities.insert(cap.name().to_string(), cap);
     }
 
-    /// Load JSON-defined ScriptCapabilities from ~/.soma/capabilities/.
-    /// Called at startup so user-proposed capabilities are available immediately.
-    pub fn load_user_capabilities(&mut self) {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        let dir = std::path::PathBuf::from(home).join(".soma").join("capabilities");
-        let Ok(entries) = std::fs::read_dir(&dir) else { return };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map(|x| x == "json").unwrap_or(false) {
-                match script::ScriptCapability::from_file(&path) {
-                    Ok(cap) => {
-                        log::info!("Loaded user capability '{}' from {:?}", cap.name(), path);
-                        self.register(Box::new(cap));
-                    }
-                    Err(e) => {
-                        log::warn!("Skipping {:?}: {}", path, e);
-                    }
-                }
-            }
-        }
+    /// Rescan ~/.soma/capabilities/*.json and reload all ScriptCapabilities.
+    /// Built-in capabilities are untouched.
+    pub fn reload_scripts(&mut self) {
+        // Remove all existing script capabilities (those not in the built-in list)
+        self.capabilities.retain(|name, _| {
+            BUILTIN_NAMES.contains(&name.as_str())
+        });
+        // Re-scan and load
+        load_script_capabilities(&mut self.capabilities);
+        log::info!(
+            "Reloaded script capabilities — {} total registered",
+            self.capabilities.len()
+        );
     }
 
     /// Execute a capability action
@@ -98,10 +121,15 @@ impl CapabilityRegistry {
     pub fn list(&self) -> Vec<CapabilityInfo> {
         self.capabilities
             .values()
-            .map(|cap| CapabilityInfo {
-                name: cap.name().to_string(),
-                description: cap.description().to_string(),
-                actions: cap.actions(),
+            .map(|cap| {
+                let is_builtin = BUILTIN_NAMES.contains(&cap.name());
+                CapabilityInfo {
+                    name: cap.name().to_string(),
+                    description: cap.description().to_string(),
+                    actions: cap.actions(),
+                    version: cap.version().to_string(),
+                    is_builtin,
+                }
             })
             .collect()
     }
@@ -124,6 +152,28 @@ impl CapabilityRegistry {
             out.push('\n');
         }
         out
+    }
+}
+
+/// Private helper: scan ~/.soma/capabilities/*.json and insert ScriptCapabilities
+/// into the provided map. Called at startup and on hot-reload.
+fn load_script_capabilities(caps: &mut HashMap<String, Box<dyn Capability>>) {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let dir = std::path::PathBuf::from(home).join(".soma").join("capabilities");
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map(|x| x == "json").unwrap_or(false) {
+            match script::ScriptCapability::from_file(&path) {
+                Ok(cap) => {
+                    log::info!("Loaded user capability '{}' from {:?}", cap.name(), path);
+                    caps.insert(cap.name().to_string(), Box::new(cap));
+                }
+                Err(e) => {
+                    log::warn!("Skipping {:?}: {}", path, e);
+                }
+            }
+        }
     }
 }
 
