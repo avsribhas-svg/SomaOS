@@ -70,35 +70,48 @@ impl Capability for SystemCapability {
 
 impl SystemCapability {
     fn hostname(&self) -> CapabilityResult {
-        match fs::read_to_string("/etc/hostname") {
-            Ok(h) => ok(json!({ "hostname": h.trim() })),
-            Err(_) => {
-                // Fallback to procfs
-                match fs::read_to_string("/proc/sys/kernel/hostname") {
-                    Ok(h) => ok(json!({ "hostname": h.trim() })),
-                    Err(e) => err(&format!("Cannot read hostname: {}", e)),
-                }
+        // Linux: /etc/hostname or /proc/sys/kernel/hostname
+        if let Ok(h) = fs::read_to_string("/etc/hostname") {
+            let h = h.trim().to_string();
+            if !h.is_empty() { return ok(json!({ "hostname": h })); }
+        }
+        if let Ok(h) = fs::read_to_string("/proc/sys/kernel/hostname") {
+            let h = h.trim().to_string();
+            if !h.is_empty() { return ok(json!({ "hostname": h })); }
+        }
+        // macOS / fallback: hostname command
+        match std::process::Command::new("hostname").output() {
+            Ok(out) => {
+                let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !h.is_empty() { ok(json!({ "hostname": h })) }
+                else { err("hostname command returned empty output") }
             }
+            Err(e) => err(&format!("Cannot get hostname: {}", e)),
         }
     }
 
     fn uptime(&self) -> CapabilityResult {
-        match fs::read_to_string("/proc/uptime") {
-            Ok(content) => {
-                let parts: Vec<&str> = content.split_whitespace().collect();
-                if let Some(secs_str) = parts.first() {
-                    if let Ok(secs) = secs_str.parse::<f64>() {
-                        let hours = (secs / 3600.0) as u64;
-                        let mins = ((secs % 3600.0) / 60.0) as u64;
-                        return ok(json!({
-                            "uptime_seconds": secs as u64,
-                            "uptime_human": format!("{}h {}m", hours, mins),
-                        }));
-                    }
+        // Linux: /proc/uptime
+        if let Ok(content) = fs::read_to_string("/proc/uptime") {
+            let parts: Vec<&str> = content.split_whitespace().collect();
+            if let Some(secs_str) = parts.first() {
+                if let Ok(secs) = secs_str.parse::<f64>() {
+                    let hours = (secs / 3600.0) as u64;
+                    let mins = ((secs % 3600.0) / 60.0) as u64;
+                    return ok(json!({
+                        "uptime_seconds": secs as u64,
+                        "uptime_human": format!("{}h {}m", hours, mins),
+                    }));
                 }
-                err("Failed to parse /proc/uptime")
             }
-            Err(e) => err(&format!("Cannot read uptime: {}", e)),
+        }
+        // macOS / fallback: uptime command
+        match std::process::Command::new("uptime").output() {
+            Ok(out) => {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                ok(json!({ "uptime": s }))
+            }
+            Err(e) => err(&format!("Cannot get uptime: {}", e)),
         }
     }
 
@@ -208,29 +221,28 @@ impl SystemCapability {
     }
 
     fn network_status(&self) -> CapabilityResult {
-        match std::process::Command::new("ip")
+        // Try `ip` (Linux) first, then `ifconfig` (macOS/BSD)
+        let output = std::process::Command::new("ip")
             .args(["addr", "show"])
             .output()
-        {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
+            .ok()
+            .filter(|o| o.status.success() && !o.stdout.is_empty())
+            .or_else(|| std::process::Command::new("ifconfig").output().ok());
+
+        match output {
+            Some(out) => {
+                let text = String::from_utf8_lossy(&out.stdout).to_string();
+                // Parse inet addresses for a compact summary
                 let mut interfaces: Vec<Value> = Vec::new();
                 let mut current_iface = String::new();
                 let mut current_addrs: Vec<String> = Vec::new();
-
-                for line in stdout.lines() {
+                for line in text.lines() {
                     if !line.starts_with(' ') && !line.starts_with('\t') {
-                        // New interface line
                         if !current_iface.is_empty() {
-                            interfaces.push(json!({
-                                "interface": current_iface,
-                                "addresses": current_addrs,
-                            }));
+                            interfaces.push(json!({ "interface": current_iface, "addresses": current_addrs }));
                         }
-                        // Extract interface name
-                        if let Some(name) = line.split(':').nth(1) {
-                            current_iface = name.trim().to_string();
-                        }
+                        // `ip`: "2: eth0: <...>" — `ifconfig`: "en0: flags=..."
+                        current_iface = line.split([':', ' ']).find(|s| !s.is_empty() && s.chars().next().map(|c| c.is_alphanumeric()).unwrap_or(false)).unwrap_or("").trim().to_string();
                         current_addrs = Vec::new();
                     } else if line.contains("inet ") {
                         if let Some(addr) = line.split_whitespace().nth(1) {
@@ -239,27 +251,29 @@ impl SystemCapability {
                     }
                 }
                 if !current_iface.is_empty() {
-                    interfaces.push(json!({
-                        "interface": current_iface,
-                        "addresses": current_addrs,
-                    }));
+                    interfaces.push(json!({ "interface": current_iface, "addresses": current_addrs }));
                 }
-
                 ok(json!({ "interfaces": interfaces }))
             }
-            Err(e) => err(&format!("Failed to query network: {}", e)),
+            None => err("Cannot query network interfaces (no 'ip' or 'ifconfig' found)"),
         }
     }
 
     fn kernel_info(&self) -> CapabilityResult {
+        // Linux: /proc/version; macOS fallback: uname -a
         let version = fs::read_to_string("/proc/version")
-            .unwrap_or_else(|_| "unknown".to_string());
+            .ok()
+            .or_else(|| {
+                std::process::Command::new("uname")
+                    .arg("-a")
+                    .output()
+                    .ok()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
         let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default();
-
-        let mut info = json!({
-            "kernel_version": version.trim(),
-        });
-
+        let mut info = json!({ "kernel_version": version.trim() });
         for line in os_release.lines() {
             if let Some((key, val)) = line.split_once('=') {
                 let val = val.trim_matches('"');
@@ -270,7 +284,12 @@ impl SystemCapability {
                 }
             }
         }
-
+        // macOS: add sw_vers info if available
+        if version.contains("Darwin") || cfg!(target_os = "macos") {
+            if let Ok(out) = std::process::Command::new("sw_vers").output() {
+                info["sw_vers"] = json!(String::from_utf8_lossy(&out.stdout).trim().to_string());
+            }
+        }
         ok(info)
     }
 }
@@ -287,6 +306,6 @@ fn err(msg: &str) -> CapabilityResult {
     CapabilityResult {
         success: false,
         data: Value::Null,
-        error: Some(CapabilityError::new(ErrorReason::InternalError, "msg")),
+        error: Some(CapabilityError::new(ErrorReason::InternalError, msg)),
     }
 }

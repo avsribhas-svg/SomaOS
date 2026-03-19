@@ -205,6 +205,51 @@ fn try_parse_text_as_tool_calls(text: &str) -> Option<Vec<ToolCall>> {
         // Bare params inference: model returned just the args without a tool name.
         // Detect by recognizable top-level keys.
         if obj.get("name").is_none() {
+            // {"url": "..."} bare → browser__navigate
+            if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
+                calls.push(ToolCall {
+                    name: "browser__navigate".to_string(),
+                    arguments: serde_json::json!({ "url": url }),
+                });
+                continue;
+            }
+            // {"query": "..."} bare → browser__search (most common bare-query intent)
+            if let Some(query) = obj.get("query").and_then(|v| v.as_str()) {
+                calls.push(ToolCall {
+                    name: "browser__search".to_string(),
+                    arguments: serde_json::json!({ "query": query }),
+                });
+                continue;
+            }
+            // {"gap": "..."} bare → meta__describe_gap
+            if let Some(gap) = obj.get("gap").and_then(|v| v.as_str()) {
+                calls.push(ToolCall {
+                    name: "meta__describe_gap".to_string(),
+                    arguments: serde_json::json!({ "gap": gap }),
+                });
+                continue;
+            }
+            // {"package": "..."} bare → package__install (install is the more common action)
+            if let Some(pkg) = obj.get("package").and_then(|v| v.as_str()) {
+                calls.push(ToolCall {
+                    name: "package__install".to_string(),
+                    arguments: serde_json::json!({ "package": pkg }),
+                });
+                continue;
+            }
+            // {"function": "cap__action", "args": {...}} — model uses "function" as key instead of "name"
+            if let Some(fn_name) = obj.get("function").and_then(|v| v.as_str()) {
+                let arguments = obj.get("args")
+                    .or_else(|| obj.get("arguments"))
+                    .or_else(|| obj.get("params"))
+                    .cloned()
+                    .unwrap_or(Value::Object(Default::default()));
+                let name = normalize_tool_name(fn_name);
+                if name.contains("__") {
+                    calls.push(ToolCall { name, arguments });
+                    continue;
+                }
+            }
             if let Some(cells) = obj.get("cells") {
                 // cells JSON string → parse it first if needed
                 let cells = match cells {

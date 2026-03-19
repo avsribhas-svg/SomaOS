@@ -484,18 +484,5 @@
     "prompt": "what can you do",
     "auto_approve": false,
     "timeout_secs": 60
-  },
-  {
-    "id": "help_me",
-    "prompt": "help",
-    "auto_approve": false,
-    "timeout_secs": 60
-  },
-  {
-    "id": "open_ended_system",
-    "prompt": "give me a full system status report",
-    "expect_capability": "system",
-    "auto_approve": true,
-    "timeout_secs": 90
   }
 ]

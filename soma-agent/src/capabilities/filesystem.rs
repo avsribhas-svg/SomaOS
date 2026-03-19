@@ -108,9 +108,7 @@ impl Capability for FileSystemCapability {
 
 impl FileSystemCapability {
     fn list_dir(&self, params: &Value) -> CapabilityResult {
-        let path = params
-            .get("path")
-            .and_then(|v| v.as_str())
+        let path = get_str(params, &["path", "dir", "directory", "folder", "dir_path"])
             .map(expand_tilde)
             .unwrap_or_else(|| ".".to_string());
         if let Err(e) = guard_traversal(&path) { return e; }
@@ -144,7 +142,7 @@ impl FileSystemCapability {
     }
 
     fn read_file(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
+        let path = match get_str(params, &["path", "file_path", "filename", "filepath", "file"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
@@ -194,12 +192,12 @@ impl FileSystemCapability {
     }
 
     fn write_file(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
+        let path = match get_str(params, &["path", "file_path", "filename", "filepath", "file"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
         if let Err(e) = guard_traversal(&path) { return e; }
-        let content = match params.get("content").and_then(|v| v.as_str()) {
+        let content = match get_str(params, &["content", "text", "data", "body", "contents"]) {
             Some(c) => c,
             None => return err("Missing required param: content"),
         };
@@ -211,7 +209,7 @@ impl FileSystemCapability {
     }
 
     fn create_dir(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
+        let path = match get_str(params, &["path", "dir_path", "directory", "dir", "folder", "name"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
@@ -224,7 +222,7 @@ impl FileSystemCapability {
     }
 
     fn delete(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
+        let path = match get_str(params, &["path", "file_path", "filename", "filepath", "file", "target"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
@@ -244,12 +242,12 @@ impl FileSystemCapability {
     }
 
     fn copy(&self, params: &Value) -> CapabilityResult {
-        let from = match params.get("from").and_then(|v| v.as_str()).map(expand_tilde) {
+        let from = match get_str(params, &["from", "source", "src", "from_path", "source_path"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: from"),
         };
         if let Err(e) = guard_traversal(&from) { return e; }
-        let to = match params.get("to").and_then(|v| v.as_str()).map(expand_tilde) {
+        let to = match get_str(params, &["to", "destination", "dest", "target", "to_path", "dest_path"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: to"),
         };
@@ -262,12 +260,12 @@ impl FileSystemCapability {
     }
 
     fn move_item(&self, params: &Value) -> CapabilityResult {
-        let from = match params.get("from").and_then(|v| v.as_str()).map(expand_tilde) {
+        let from = match get_str(params, &["from", "source", "src", "from_path", "source_path"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: from"),
         };
         if let Err(e) = guard_traversal(&from) { return e; }
-        let to = match params.get("to").and_then(|v| v.as_str()).map(expand_tilde) {
+        let to = match get_str(params, &["to", "destination", "dest", "target", "to_path", "dest_path"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: to"),
         };
@@ -280,12 +278,12 @@ impl FileSystemCapability {
     }
 
     fn find(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
+        let path = match get_str(params, &["path", "directory", "dir", "search_path", "root", "in"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
         if let Err(e) = guard_traversal(&path) { return e; }
-        let pattern = match params.get("pattern").and_then(|v| v.as_str()) {
+        let pattern = match get_str(params, &["pattern", "glob", "name", "file_pattern", "match", "extension", "ext"]) {
             Some(p) => p,
             None => return err("Missing required param: pattern"),
         };
@@ -311,7 +309,7 @@ impl FileSystemCapability {
     }
 
     fn file_info(&self, params: &Value) -> CapabilityResult {
-        let path = match params.get("path").and_then(|v| v.as_str()).map(expand_tilde) {
+        let path = match get_str(params, &["path", "file_path", "filename", "filepath", "file", "target"]).map(expand_tilde) {
             Some(p) => p,
             None => return err("Missing required param: path"),
         };
@@ -337,6 +335,16 @@ impl FileSystemCapability {
             Err(e) => err(&format!("Cannot stat '{}': {}", path, e)),
         }
     }
+}
+
+/// Look up a string param by multiple possible key names (model uses inconsistent names).
+fn get_str<'a>(params: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    for key in keys {
+        if let Some(v) = params.get(key).and_then(|v| v.as_str()) {
+            return Some(v);
+        }
+    }
+    None
 }
 
 /// Expand a leading `~` to the HOME directory.
