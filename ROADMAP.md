@@ -82,16 +82,31 @@
 - `CapabilityError { reason, context, alternatives }` — structured typed errors across all 11 capability modules; replaces raw strings
 - Agent can programmatically reason about failure: retry, escalate via HITL, or try an alternative path
 
-### v1.1 (partial) — AgentAPI stub + Exhaustive Test Suite
+### v1.1 — AgentAPI + Dual-Interface Apps + Semantic FS ← THESIS MILESTONE ✅
 
-- **Test suite**: expanded soma-cli --test from 8 → 61 scenarios covering all 13 capability modules
-- **Layer 0 fast-path**: +30 deterministic keyword interceptors — unambiguous intents never hit the LLM (0ms latency)
-- **macOS capability fixes**: system.rs fallbacks for hostname/uptime/network_status/kernel_info (was Linux-only `/proc/*`)
-- **Filesystem param aliases**: `get_str()` helper handles `source`/`destination`/`file_path`/etc. alongside canonical `from`/`to`/`path`
-- **Ollama text fallback**: bare-param patterns for `{"url":}`, `{"query":}`, `{"gap":}`, `{"package":}`, `{"function":}` when model omits tool name
-- **err() bug fix**: system.rs `err()` was hardcoding literal `"msg"` instead of passing the message variable
-- **Test infrastructure**: `--filter <prefix>`, `--concurrency N`, grouped failure summary in soma-cli
-- **Pass rate**: 22/63 → 61/61 (100%)
+**AgentAPI Core**
+- `NativeAppContent` trait: `describe_state`, `execute_action`, input/render hooks
+- `WindowContent::NativeApp(Box<dyn NativeAppContent>)` — compositor dual-interface window type
+- `AppState { summary, cells, dirty }` + `AppStateCache` shared between IPC and capabilities
+- `AppStateChanged` + `AppAction` IPC variants — compositor pushes state to agent on every edit
+
+**Dual-Interface Apps**
+- `soma-sheets`: spreadsheet with formula evaluator (SUM/AVG/MIN/MAX/COUNT, A1 notation), formula bar, Tab/Enter/Arrow navigation, number right-align
+- `soma-docs`: block-based document editor (paragraphs, headings, code blocks)
+- Both expose the same data model to human (GUI) and agent (structured API) simultaneously
+
+**New Agent Capabilities (13 modules total)**
+- `sheets`: create, describe, read_range, write_cell, apply_formula
+- `docs`: create, describe, write_block, read_blocks
+- `semantic_fs`: tag, annotate, find_by_intent, list_tagged, describe_file, get_history
+- Session tracking: `Session` + `SessionStep` persisted to `~/.soma/sessions/<id>.json`
+
+**Test Suite + Agent Robustness**
+- 61/61 scenario integration test suite covering all 13 modules (100% pass rate)
+- Layer 0 fast-path: 30+ keyword interceptors, 0ms latency for unambiguous intents
+- Ollama text-fallback parser: bare params, `{"function":}`, `{"cmd":}`, `{"functions":[]}` wrappers
+- macOS capability fixes: hostname/uptime/network_status/kernel_info (was Linux-only `/proc/*`)
+- `--filter <prefix>`, `--concurrency N`, grouped failure summary in soma-cli
 
 ### v1.0.2 — Bug Fixes + Code Health
 
@@ -107,38 +122,13 @@
 
 ## Planned
 
-### v1.1 — AgentAPI + soma-sheets + Session Model ← THESIS MILESTONE
+### v1.2 — Capability Governance + Advanced Sessions + soma-media
 
-This is where SomaOS becomes a different computing paradigm. Both the human and the AI are first-class users of the same desktop — apps must be **dual-interface**: a good GUI for the human *and* a structured API for the agent.
-
-**AgentAPI**
-- `AgentAPI` trait in soma-common: `describe_state`, `execute_action`, `subscribe_changes`
-- `WindowContent::NativeApp` variant wrapping `Box<dyn AgentAPI>` in the compositor
-- New IPC: `AppStateQuery`, `AppAction`, `AppStateChanged`
-
-**soma-sheets (first dual-interface app)**
-- **Human**: click cells, type values, Tab/Enter navigation, formula bar — standard spreadsheet UX
-- **Agent**: `read_range`, `write_cell`, `apply_formula` via structured `AgentAPI` — no screen-scraping
-- Both share the same data model; edits from either side are immediately visible to the other
-- Agent capability: `sheets` with actions mapped to `AgentAPI::execute_action`
-
-**Agent-native primitive: Session Model**
-- Agent sessions become first-class OS objects: intent, scope, history, affected resources
-- `AgentModeStarted { task }` extended with scope (capability whitelist, directory whitelist)
-- Session history persists beyond the 5-exchange conversation window
-- Human can inspect any active session from the sidebar
-
-### v1.2 — soma-docs + Capability Governance + Semantic FS
-
-Once AgentAPI exists and soma-sheets proves the dual-interface pattern:
-- `soma-docs`: document editor (paragraphs, headings, tables, code blocks) — same dual-interface pattern
-- Capability governance: hot-reload, registry UI, gap detection, capability promotion, version tracking
-
-**Agent-native primitive: Semantic File System Layer**
-- Lightweight metadata per file: what created it, what workflows touched it, agent-generated tags/descriptions
-- Agent navigates by intent ("the spreadsheet I was working on") rather than path
-- Implementation: either `.soma-meta` sidecars (portable) or `~/.soma/index.db` (queryable) — TBD
-- New capability: `semantic_fs` with `describe_file`, `find_by_intent`, `tag`, `get_history`
+Building on the dual-interface pattern proven by v1.1:
+- Capability governance: hot-reload UI, version tracking, capability promotion (script → built-in)
+- Advanced session model: scope boundaries (capability whitelist, directory whitelist), parallel contexts
+- Semantic FS persistence: decide `.soma-meta` sidecars (portable) vs. `~/.soma/index.db` (queryable)
+- `soma-media`: image/video generation as a third dual-interface app (local diffusion)
 
 ### v1.3 — Media + Generation + Parallel Task Contexts
 - `soma-media`: image/video generation pipeline (local diffusion)

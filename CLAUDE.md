@@ -1,6 +1,6 @@
 # CLAUDE.md — SomaOS
 
-> Read this before touching any code. Updated 2026-03-18 (test suite complete, v1.1-dev).
+> Read this before touching any code. Updated 2026-03-19 (v1.1 complete — AgentAPI + soma-sheets + soma-docs + semantic_fs, 61/61 tests passing).
 
 ---
 
@@ -40,7 +40,27 @@ soma/               React + Tauri 2 macOS dev frontend
 
 ---
 
-## Current Version: v1.1-dev (as of 2026-03-18)
+## Current Version: v1.1 (as of 2026-03-19)
+
+### What was built in v1.1
+
+**AgentAPI + Dual-Interface Apps**
+- `AgentAPI` / `NativeAppContent` trait: `describe_state`, `execute_action`, `on_char/on_key/on_click/render`
+- `WindowContent::NativeApp(Box<dyn NativeAppContent>)` — first dual-interface window type
+- `AppState`, `AppStateCache`, `AppStateChanged`, `AppAction` IPC — compositor pushes state to agent on every edit
+- `soma-sheets`: spreadsheet with formula evaluator (SUM/AVG/MIN/MAX/COUNT, cell refs, ranges), Tab/Enter/Arrow navigation, formula bar, number right-align, text left-align
+- `soma-docs`: block-based document editor (paragraphs, headings, code blocks), same dual-interface pattern
+- `sheets` agent capability: `create`, `describe`, `read_range`, `write_cell`, `apply_formula`
+- `docs` agent capability: `create`, `describe`, `write_block`, `read_blocks`
+- `semantic_fs` capability: `tag`, `annotate`, `find_by_intent`, `list_tagged`, `describe_file`, `get_history`
+
+**Test Suite + Agent Robustness**
+- 61/61 scenario integration test suite covering all 13 capability modules
+- Layer 0 fast-path: 30+ keyword interceptors — unambiguous intents never hit the LLM (0ms)
+- Ollama text-fallback parser: handles bare params, `{"function":}`, `{"cmd":}`, `{" functions":[]}` wrappers
+- Session tracking in `ipc.rs`: `Session` + `SessionStep` persisted to `~/.soma/sessions/`
+
+---
 
 ### What was built in v1.0
 
@@ -64,6 +84,8 @@ soma/               React + Tauri 2 macOS dev frontend
 
 **Capabilities**: 36 built-in actions across 10 modules (filesystem, process, system, network, package, browser, vision, meta, desktop_agent, + user-defined JSON)
 
+*(v1.1 adds sheets, docs, semantic_fs → 40+ actions across 13 modules)*
+
 ---
 
 ## Architecture Diagram
@@ -82,7 +104,8 @@ soma-agent (tokio → LlmProvider trait)
   ├── config.rs: SomaConfig → ~/.soma/config.toml
   ├── observer.rs: DesktopObserver (event recording, workflow patterns)
   └── capabilities/: filesystem, process, system, network, package,
-                     browser, vision, meta, script, desktop_agent
+                     browser, vision, meta, script, desktop_agent,
+                     sheets, docs, semantic_fs
 ```
 
 ---
@@ -112,7 +135,12 @@ soma-agent (tokio → LlmProvider trait)
 | `soma-agent/src/capabilities/desktop_agent.rs` | 6-action desktop control (command pattern → IPC layer sends) |
 | `soma-agent/src/capabilities/meta.rs` | propose/list/gap-log for self-improvement loop |
 | `soma-agent/src/capabilities/script.rs` | JSON-defined shell-template caps, hot-loaded from ~/.soma/capabilities/ |
-| `soma-common/src/lib.rs` | All shared IPC types (TaskPlan, BrowserUpdate, CompositorMessage, AgentMessage) |
+| `soma-agent/src/capabilities/sheets.rs` | 5-action spreadsheet control (create, describe, read_range, write_cell, apply_formula) |
+| `soma-agent/src/capabilities/docs.rs` | Document editing capability (create, describe, write_block, read_blocks) |
+| `soma-agent/src/capabilities/semantic_fs.rs` | File metadata, intent-based discovery (tag, annotate, find_by_intent, list_tagged, describe_file, get_history) |
+| `soma-compositor/src/sheets.rs` | SheetsApp: dual-interface spreadsheet (NativeAppContent + formula evaluator + GUI) |
+| `soma-compositor/src/docs.rs` | DocsApp: dual-interface document editor (NativeAppContent + block model + GUI) |
+| `soma-common/src/lib.rs` | All shared IPC types (TaskPlan, BrowserUpdate, CompositorMessage, AgentMessage, AppState) |
 | `buildroot/soma_defconfig` | Buildroot OS config |
 | `.github/workflows/build.yml` | GitHub Actions CI (x86_64 + ARM64 image builds) |
 | `docs/ANALYSIS.md` | Living architecture analysis — read this for context on design decisions |
@@ -193,13 +221,13 @@ This applies even if the session was read-only or exploratory — if understandi
 
 ## What's Next
 
-### Thesis Milestone: v1.1 — AgentAPI + soma-sheets + Session Model
+### Thesis Milestone: v1.2 — Capability Governance + Advanced Sessions
 
-**Test infrastructure is done (61/61 passing)**. Next: the actual v1.1 thesis features:
-- `AgentAPI` trait in soma-common: `describe_state`, `execute_action`, `subscribe_changes`
-- `WindowContent::NativeApp` variant wrapping `Box<dyn AgentAPI>` in the compositor
-- `soma-sheets`: first dual-interface app — good GUI for human + structured `AgentAPI` for agent, same data model
-- Session model: agent sessions become first-class OS objects with intent, scope, history, affected resources
+v1.1 proved the dual-interface pattern (soma-sheets, soma-docs, semantic_fs). Next:
+- Capability governance: hot-reload UI, version tracking, capability promotion from script → built-in
+- Advanced session model: scope boundaries (capability whitelist, directory whitelist), parallel contexts
+- Semantic FS persistence: decide sidecars (`.soma-meta`) vs. central index (`~/.soma/index.db`)
+- `soma-media`: image/video generation pipeline as a third dual-interface app
 
 ---
 
@@ -208,8 +236,8 @@ This applies even if the session was read-only or exploratory — if understandi
 | Risk | Severity | Mitigation |
 |---|---|---|
 | ~~`main.rs` complexity (1,342 lines)~~ | ~~**High**~~ | ✅ Resolved v1.0.1 — extracted to compositor.rs + event_handler.rs; main.rs is 712 lines |
-| AgentAPI `describe_state` design | **High** | Prototype with soma-sheets; the answer shapes all future apps |
-| Human + agent editing same data model concurrently | **High** | Design conflict resolution in v1.1 (cell-level locking? last-write-wins? OT?) |
+| ~~AgentAPI `describe_state` design~~ | ~~**High**~~ | ✅ Resolved v1.1 — SheetsApp + DocsApp prove the pattern; summary + full cells in AppState |
+| Human + agent editing same data model concurrently | **Medium** | v1.1 uses last-write-wins; monitor for conflicts; OT/CRDT deferred to v1.2 |
 | DynamicApp widget tree growing into a full UI framework | Medium | Keep minimal: status surfaces for agent, not apps for humans |
 | ~~No automated tests~~ | ~~Medium~~ | ✅ Resolved — 61-scenario integration test suite (soma-cli --test), 100% pass rate |
 
@@ -217,8 +245,8 @@ This applies even if the session was read-only or exploratory — if understandi
 
 ## Open Design Questions
 
-1. What should `AgentAPI::describe_state` return for a spreadsheet? This defines the contract for all future apps.
-2. How do human edits and agent writes coexist on the same data model? Cell-level locking? Last-write-wins? OT/CRDT?
+1. ~~What should `AgentAPI::describe_state` return for a spreadsheet?~~ ✅ Answered — `AppState { summary, cells }` with compact summary for orchestrators + full cell map for workers.
+2. How do human edits and agent writes coexist on the same data model? v1.1 uses last-write-wins. Is that sufficient, or do we need OT/CRDT for parallel agents?
 3. What does an agent session scope look like? JSON config? Capability whitelist? Directory whitelist?
 4. Should semantic FS metadata live as sidecars (`.soma-meta`) or in a central index (`~/.soma/index.db`)? Sidecars are portable; index is queryable.
 5. When should the agent auto-recover from typed failure vs. escalate to HITL? Low-risk retries auto; anything touching user data escalates.

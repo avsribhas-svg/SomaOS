@@ -2,7 +2,7 @@
 
 > **Living document.** Updated across agent sessions for cross-agent transparency. Any AI agent working on SomaOS should read this first.
 
-*Last updated: 2026-03-15 — post v1.0.2 bug fix pass*
+*Last updated: 2026-03-19 — post v1.1 completion (AgentAPI + soma-sheets + soma-docs + semantic_fs, 61/61 tests)*
 
 ---
 
@@ -17,7 +17,7 @@ Both the human and the AI are **first-class co-inhabitants of the same desktop**
 
 ---
 
-## What Exists (v1.0)
+## What Exists (v1.1)
 
 ### Supervision Layer (human's interface)
 | Component | Status | Notes |
@@ -64,25 +64,17 @@ These four primitives are what separate "Linux + AI chat" from an OS genuinely b
 - What it has permission to affect this session (scoped capabilities)
 - Session history that persists beyond the 5-exchange window
 
-**Where it fits**: v1.1 (alongside AgentAPI). Agent sessions become first-class OS objects. The `AgentModeStarted { task }` message already carries intent — extend it with scope and tracking.
+**Status**: Partially implemented in v1.1 — `Session` + `SessionStep` structs in `ipc.rs` track capability/action history and affected paths per agent mode session, persisted to `~/.soma/sessions/<id>.json`. Scope boundaries (capability whitelist, directory whitelist) and parallel contexts deferred to v1.2.
 
 ### 2. Typed Failure ✅ DONE (v1.0.1)
 ~~**Current**: Capability errors are `{ success: false, error: Some("string") }`. Agent can't reason about recovery.~~
 
 **Implemented**: `CapabilityError { reason: ErrorReason, context, alternatives }` in soma-common. All 11 capability modules migrated. Agent can programmatically decide: retry, escalate via HITL, or try an alternative path.
 
-### 3. Semantic File System Layer
-**Current**: Files are bytes with names. Agent navigates by path.
+### 3. Semantic File System Layer ✅ DONE (v1.1)
+~~**Where it fits**: v1.2 (after AgentAPI proves the structured-state pattern).~~
 
-**Needed**: Lightweight metadata sidecars (`.soma-meta`) or an indexed store:
-- What created this file (agent task, human edit, capability action)
-- What workflows have touched it
-- Agent-generated description / tags
-- Last context it was relevant in
-
-Agent can then navigate by intent ("the spreadsheet I was working on yesterday") rather than path.
-
-**Where it fits**: v1.2 (after AgentAPI proves the structured-state pattern). Build as a capability + OS service, not as a modified filesystem.
+**Implemented**: `semantic_fs` capability with `tag`, `annotate`, `find_by_intent`, `list_tagged`, `describe_file`, `get_history`. Metadata stored as `.soma-meta` sidecar files (portable). Persistence strategy (sidecars vs. central index) still open — current impl uses sidecars but a queryable index may be needed at scale.
 
 ### 4. Parallel Task Contexts
 **Current**: Agent handles one task per client connection. Single thread of attention.
@@ -106,7 +98,7 @@ Agent can then navigate by intent ("the spreadsheet I was working on yesterday")
 | AgentAPI `describe_state` design | **High** | Prototype with soma-sheets first; the answer shapes all future apps |
 | Concurrency: human + agent editing same data model | **High** | Design conflict resolution in v1.1 (cell-level locking? last-write-wins? operational transform?) |
 | Agent reliability on complex multi-step tasks | Medium | Native tool calling helps; session model will help more |
-| No automated tests | Medium | Add at least capability unit tests before v1.2 |
+| ~~No automated tests~~ | ~~Medium~~ | ✅ Resolved v1.1 — 61-scenario integration test suite (soma-cli --test), 100% pass rate |
 
 ---
 
@@ -131,8 +123,8 @@ Agent can then navigate by intent ("the spreadsheet I was working on yesterday")
 v1.0    ━━━━━━━━━━━━━━━━━━━  DONE   Desktop shell (shared environment)
 v1.0.1  ━━━━━━               DONE   main.rs split + typed failure
 v1.0.2  ━━━━━━               DONE   Bug fix pass (dock, UTF-8, IPC reconnect, shared config loader)
-v1.1    ━━━━━━━━━━━━━━━━━━━  NEXT   AgentAPI + soma-sheets + session model
-v1.2    ━━━━━━━━━━━━━━                soma-docs + governance + semantic FS
+v1.1    ━━━━━━━━━━━━━━━━━━━  DONE   AgentAPI + dual-interface apps (sheets, docs) + semantic_fs
+v1.2    ━━━━━━━━━━━━━━        NEXT   Capability governance + advanced sessions + soma-media
 v1.3    ━━━━━━━━━━━━                  soma-media + parallel tasks
 v1.4    ━━━━━━━━━━                    Federation
 v2.0    ━━━━━━━━━━━━━━━               USB + plugin API
@@ -142,8 +134,8 @@ v2.0    ━━━━━━━━━━━━━━━               USB + plugin
 
 ## Key Design Questions (Open)
 
-1. **What should `describe_state` return for a spreadsheet?** This answer defines the AgentAPI contract for all future apps.
-2. **How do human edits and agent writes coexist on the same data model?** Cell-level locking? Last-write-wins? OT/CRDT?
+1. ~~**What should `describe_state` return for a spreadsheet?**~~ ✅ Answered — `AppState { summary, cells }`: compact summary for orchestrator-level decisions + full cell map for worker reads.
+2. **How do human edits and agent writes coexist on the same data model?** v1.1 uses last-write-wins. Is that sufficient, or do we need OT/CRDT for parallel agents?
 3. **What does an agent session scope look like?** JSON config? Capability whitelist? Directory whitelist?
-4. **Should semantic FS metadata live as sidecars (.soma-meta) or in a central index (~/.soma/index.db)?** Sidecars are portable; index is queryable.
+4. **Should semantic FS metadata scale from sidecars to a central index?** Current impl uses `.soma-meta` sidecars (portable). A queryable `~/.soma/index.db` may be needed once file counts grow.
 5. **When should the agent auto-recover from typed failure vs. escalate to HITL?** Low-risk retries auto; anything touching user data escalates.

@@ -45,7 +45,7 @@ The HITL (Human-in-the-Loop) approval system is the conflict resolution primitiv
 
 ## Abstract
 
-Current state (v1.0.2 stable): SomaOS runs as a bootable Linux image with a custom bare-metal compositor.
+Current state (v1.1 stable): SomaOS runs as a bootable Linux image with a custom bare-metal compositor and dual-interface native apps where both the human and the agent use the same GUI and data model simultaneously.
 
 The system provides:
 - A **full macOS-style desktop environment** — floating windows, a centred dock, a menu bar, and an AI sidebar as a slide-in overlay. The terminal and browser are applications, not panels.
@@ -55,7 +55,10 @@ The system provides:
 - **Private mode** — one keystroke disables observation; the menu bar shows a `[pvt]` indicator. The agent still responds to prompts but learns nothing from the session.
 - A **custom DRM/KMS compositor** that renders directly to GPU framebuffer — no X11 or Wayland server required
 - A **login screen** that boots straight into Soma, with no traditional desktop
-- An **agent daemon** with 43 built-in capability actions across 9 modules, plus unlimited user-defined capabilities (loaded from `~/.soma/capabilities/*.json`)
+- An **agent daemon** with 40+ built-in capability actions across 13 modules (filesystem, process, system, network, package, browser, vision, meta, desktop_agent, script, sheets, docs, semantic_fs), plus unlimited user-defined capabilities (loaded from `~/.soma/capabilities/*.json`)
+- **soma-sheets** — dual-interface spreadsheet: human edits cells via GUI, agent reads/writes via `sheets` capability. Same data model, two interfaces. No screen-scraping.
+- **soma-docs** — dual-interface document editor: block-based model (paragraphs, headings, code blocks) accessible to both human and agent
+- **Semantic file system** — `semantic_fs` capability for intent-based file discovery (`find_by_intent`, `tag`, `annotate`, `get_history`)
 - **Browser panel** — headless Chromium integration; agent can navigate, scrape, and screenshot. Browser opens as a floating window in the desktop environment.
 - **Vision capability** — image understanding via Ollama qwen2.5-vl:7b; agent can analyze images with natural language queries
 - **Multi-provider LLM** (Ollama, Anthropic, OpenAI, Gemini) with native tool calling; provider and model hot-swappable from the Settings tab
