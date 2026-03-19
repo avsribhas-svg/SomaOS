@@ -1,6 +1,6 @@
 # CLAUDE.md — SomaOS
 
-> Read this before touching any code. Updated post v1.0 (2026-03-12).
+> Read this before touching any code. Updated 2026-03-18 (test suite complete, v1.1-dev).
 
 ---
 
@@ -40,7 +40,7 @@ soma/               React + Tauri 2 macOS dev frontend
 
 ---
 
-## Current Version: v1.0.2 (stable as of 2026-03-15)
+## Current Version: v1.1-dev (as of 2026-03-18)
 
 ### What was built in v1.0
 
@@ -194,6 +194,8 @@ This applies even if the session was read-only or exploratory — if understandi
 ## What's Next
 
 ### Thesis Milestone: v1.1 — AgentAPI + soma-sheets + Session Model
+
+**Test infrastructure is done (61/61 passing)**. Next: the actual v1.1 thesis features:
 - `AgentAPI` trait in soma-common: `describe_state`, `execute_action`, `subscribe_changes`
 - `WindowContent::NativeApp` variant wrapping `Box<dyn AgentAPI>` in the compositor
 - `soma-sheets`: first dual-interface app — good GUI for human + structured `AgentAPI` for agent, same data model
@@ -209,7 +211,7 @@ This applies even if the session was read-only or exploratory — if understandi
 | AgentAPI `describe_state` design | **High** | Prototype with soma-sheets; the answer shapes all future apps |
 | Human + agent editing same data model concurrently | **High** | Design conflict resolution in v1.1 (cell-level locking? last-write-wins? OT?) |
 | DynamicApp widget tree growing into a full UI framework | Medium | Keep minimal: status surfaces for agent, not apps for humans |
-| No automated tests | Medium | Add capability unit tests before v1.2 |
+| ~~No automated tests~~ | ~~Medium~~ | ✅ Resolved — 61-scenario integration test suite (soma-cli --test), 100% pass rate |
 
 ---
 

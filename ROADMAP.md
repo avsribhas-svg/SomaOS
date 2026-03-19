@@ -82,6 +82,17 @@
 - `CapabilityError { reason, context, alternatives }` — structured typed errors across all 11 capability modules; replaces raw strings
 - Agent can programmatically reason about failure: retry, escalate via HITL, or try an alternative path
 
+### v1.1 (partial) — AgentAPI stub + Exhaustive Test Suite
+
+- **Test suite**: expanded soma-cli --test from 8 → 61 scenarios covering all 13 capability modules
+- **Layer 0 fast-path**: +30 deterministic keyword interceptors — unambiguous intents never hit the LLM (0ms latency)
+- **macOS capability fixes**: system.rs fallbacks for hostname/uptime/network_status/kernel_info (was Linux-only `/proc/*`)
+- **Filesystem param aliases**: `get_str()` helper handles `source`/`destination`/`file_path`/etc. alongside canonical `from`/`to`/`path`
+- **Ollama text fallback**: bare-param patterns for `{"url":}`, `{"query":}`, `{"gap":}`, `{"package":}`, `{"function":}` when model omits tool name
+- **err() bug fix**: system.rs `err()` was hardcoding literal `"msg"` instead of passing the message variable
+- **Test infrastructure**: `--filter <prefix>`, `--concurrency N`, grouped failure summary in soma-cli
+- **Pass rate**: 22/63 → 61/61 (100%)
+
 ### v1.0.2 — Bug Fixes + Code Health
 
 - **Settings dock indicator**: Settings window `is_open` dot now correctly syncs via `has_settings` param
