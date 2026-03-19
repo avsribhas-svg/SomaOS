@@ -286,6 +286,23 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
         });
     }
 
+    // Delete file/directory — "delete the file <path>" or "remove <path>"
+    if (s.contains("delete") || s.contains("remove") || s.contains("rm "))
+        && (s.contains("file") || s.contains("/") || s.contains("~/"))
+        && !s.contains("package") && !s.contains("install")
+    {
+        let path = extract_path_token(input).unwrap_or_else(|| "/tmp/soma-file".to_string());
+        return Some(TaskPlan {
+            intent: "delete_file".to_string(), description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "filesystem".to_string(), action: "delete".to_string(),
+                params: serde_json::json!({ "path": path }),
+                description: "delete_file".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
+    }
+
     // Browser screenshot
     if (s.contains("screenshot") || s.contains("screen shot") || s.contains("capture"))
         && (s.contains("browser") || s.contains("page") || s.contains("tab") || s.contains("current"))
