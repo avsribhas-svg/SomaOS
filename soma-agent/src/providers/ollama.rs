@@ -237,6 +237,20 @@ fn try_parse_text_as_tool_calls(text: &str) -> Option<Vec<ToolCall>> {
                 });
                 continue;
             }
+            // {"cmd": "action", "args": {...}, "type": "capability"} — another model format
+            if let Some(cmd) = obj.get("cmd").and_then(|v| v.as_str()) {
+                let cap_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("filesystem");
+                let arguments = obj.get("args")
+                    .or_else(|| obj.get("arguments"))
+                    .or_else(|| obj.get("params"))
+                    .cloned()
+                    .unwrap_or(Value::Object(Default::default()));
+                let name = format!("{}__{}", cap_type, cmd);
+                if name.contains("__") {
+                    calls.push(ToolCall { name, arguments });
+                    continue;
+                }
+            }
             // {"function": "cap__action", "args": {...}} — model uses "function" as key instead of "name"
             if let Some(fn_name) = obj.get("function").and_then(|v| v.as_str()) {
                 let arguments = obj.get("args")

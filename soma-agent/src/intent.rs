@@ -251,6 +251,56 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
         });
     }
 
+    // Write file — "write '<content>' to <path>" — LLM sends inconsistent param names
+    if (s.contains("write") || s.contains("save"))
+        && (s.contains(" to /") || s.contains(" to ~/") || s.contains(" to ./"))
+        && !s.contains("document") && !s.contains("spreadsheet")
+    {
+        let path = extract_path_token(input).unwrap_or_else(|| "/tmp/soma-output.txt".to_string());
+        let content = extract_quoted_any(input).unwrap_or_else(|| "".to_string());
+        return Some(TaskPlan {
+            intent: "write_file".to_string(), description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "filesystem".to_string(), action: "write_file".to_string(),
+                params: serde_json::json!({ "path": path, "content": content }),
+                description: "write_file".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
+    }
+
+    // Create directory — "create a directory at <path>" or "mkdir <path>"
+    if (s.contains("create") || s.contains("make") || s.contains("mkdir"))
+        && (s.contains("director") || s.contains("folder") || s.contains("mkdir"))
+        && !s.contains("spreadsheet") && !s.contains("document")
+    {
+        let path = extract_path_token(input).unwrap_or_else(|| "/tmp/new-dir".to_string());
+        return Some(TaskPlan {
+            intent: "create_dir".to_string(), description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "filesystem".to_string(), action: "create_dir".to_string(),
+                params: serde_json::json!({ "path": path }),
+                description: "create_dir".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
+    }
+
+    // Browser screenshot
+    if (s.contains("screenshot") || s.contains("screen shot") || s.contains("capture"))
+        && (s.contains("browser") || s.contains("page") || s.contains("tab") || s.contains("current"))
+    {
+        return Some(TaskPlan {
+            intent: "browser_screenshot".to_string(), description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "browser".to_string(), action: "screenshot".to_string(),
+                params: serde_json::Value::Object(Default::default()),
+                description: "browser_screenshot".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
+    }
+
     // Copy file — extract from/to directly to avoid param name mismatch
     if s.starts_with("copy ") || (s.contains("copy") && s.contains(" to ") && (s.contains("/") || s.contains("~"))) {
         let paths: Vec<&str> = input.split_whitespace()
