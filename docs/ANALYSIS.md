@@ -2,7 +2,7 @@
 
 > **Living document.** Updated across agent sessions for cross-agent transparency. Any AI agent working on SomaOS should read this first.
 
-*Last updated: 2026-03-19 — post v1.1 completion (AgentAPI + soma-sheets + soma-docs + semantic_fs, 61/61 tests)*
+*Last updated: 2026-03-22 — post v1.2 completion (Capability Governance + Session Scope + Semantic FS SQLite + soma-media, 70/70 tests)*
 
 ---
 
@@ -17,7 +17,7 @@ Both the human and the AI are **first-class co-inhabitants of the same desktop**
 
 ---
 
-## What Exists (v1.1)
+## What Exists (v1.2)
 
 ### Supervision Layer (human's interface)
 | Component | Status | Notes |
@@ -32,7 +32,7 @@ Both the human and the AI are **first-class co-inhabitants of the same desktop**
 ### Agent Layer (agent's interface)
 | Component | Status | Notes |
 |---|---|---|
-| Capability registry | ✅ | 13 modules (filesystem, process, system, network, package, browser, vision, meta, script, desktop_agent, docs, semantic_fs, sheets) + user-defined JSON |
+| Capability registry | ✅ | 14 modules (filesystem, process, system, network, package, browser, vision, meta, script, desktop_agent, docs, semantic_fs, sheets, media) + user-defined JSON |
 | LLM brain | ✅ | Native tool calling: Ollama, Anthropic, OpenAI, Gemini via `LlmProvider` trait |
 | Self-improvement loop | ✅ | `meta.propose` → HITL → `ScriptCapability` → hot-load |
 | Desktop agent mode | ✅ | `AgentModeStarted`/`Ended`, `DesktopAction`, `SpawnApp`, `ActivityUpdate` |
@@ -55,26 +55,18 @@ Both the human and the AI are **first-class co-inhabitants of the same desktop**
 
 These four primitives are what separate "Linux + AI chat" from an OS genuinely built for agents:
 
-### 1. Session Model
-**Current**: Agent has 5-exchange conversation memory. No concept of task scope, session history, or capability boundaries per session.
+### 1. Session Model ✅ DONE (v1.2, scoped)
+**Implemented**: `SessionScope { capability_whitelist, path_whitelist }` in soma-common. `AgentModeStarted` carries `scope: Option<SessionScope>`. Scope enforced in `ipc.rs` before each step execution (capability + path whitelist). `GetSessionStatus` / `SessionStatusResponse` IPC round-trip. Sidebar Chat tab shows active session card.
 
-**Needed**: When the agent starts a task, the OS should know:
-- What it's trying to accomplish (intent)
-- What it has touched (affected files, windows, capabilities used)
-- What it has permission to affect this session (scoped capabilities)
-- Session history that persists beyond the 5-exchange window
-
-**Status**: Partially implemented in v1.1 — `Session` + `SessionStep` structs in `ipc.rs` track capability/action history and affected paths per agent mode session, persisted to `~/.soma/sessions/<id>.json`. Scope boundaries (capability whitelist, directory whitelist) and parallel contexts deferred to v1.2.
+**Remaining**: Enforcement is advisory (agent-side). Server-side compositor enforcement and parallel task contexts (multiple concurrent sessions) deferred to v1.3.
 
 ### 2. Typed Failure ✅ DONE (v1.0.1)
 ~~**Current**: Capability errors are `{ success: false, error: Some("string") }`. Agent can't reason about recovery.~~
 
 **Implemented**: `CapabilityError { reason: ErrorReason, context, alternatives }` in soma-common. All 11 capability modules migrated. Agent can programmatically decide: retry, escalate via HITL, or try an alternative path.
 
-### 3. Semantic File System Layer ✅ DONE (v1.1)
-~~**Where it fits**: v1.2 (after AgentAPI proves the structured-state pattern).~~
-
-**Implemented**: `semantic_fs` capability with `tag`, `annotate`, `find_by_intent`, `list_tagged`, `describe_file`, `get_history`. Metadata stored as `.soma-meta` sidecar files (portable). Persistence strategy (sidecars vs. central index) still open — current impl uses sidecars but a queryable index may be needed at scale.
+### 3. Semantic File System Layer ✅ DONE (v1.2 — SQLite)
+**Implemented**: `semantic_fs` capability with `tag`, `annotate`, `find_by_intent`, `list_tagged`, `describe_file`, `get_history`. v1.1 used `.soma-meta` sidecar files. v1.2 migrated to `rusqlite` (bundled) with `~/.soma/index.db`; best-effort sidecar migration on first run. Persistence question resolved — central index wins for queryability.
 
 ### 4. Parallel Task Contexts
 **Current**: Agent handles one task per client connection. Single thread of attention.
@@ -95,10 +87,11 @@ These four primitives are what separate "Linux + AI chat" from an OS genuinely b
 |---|---|---|
 | ~~`main.rs` complexity (1,342 lines)~~ | ~~**High**~~ | ✅ Resolved v1.0.1 — extracted to compositor.rs + event_handler.rs; main.rs is 712 lines |
 | DynamicApp widget tree growing into a UI framework | Medium | Keep minimal: status surfaces for agent, not apps for humans |
-| AgentAPI `describe_state` design | **High** | Prototype with soma-sheets first; the answer shapes all future apps |
-| Concurrency: human + agent editing same data model | **High** | Design conflict resolution in v1.1 (cell-level locking? last-write-wins? operational transform?) |
+| ~~AgentAPI `describe_state` design~~ | ~~**High**~~ | ✅ Resolved v1.1 — SheetsApp + DocsApp + MediaApp prove the pattern |
+| Concurrency: human + agent editing same data model | **Medium** | v1.1 last-write-wins; v1.2 adds session scope; OT/CRDT deferred to v1.3 |
+| Session scope enforcement is advisory (client-side) | **Medium** | Agent enforces scope; a compromised agent could bypass; compositor-side enforcement needed in v1.3 |
 | Agent reliability on complex multi-step tasks | Medium | Native tool calling helps; session model will help more |
-| ~~No automated tests~~ | ~~Medium~~ | ✅ Resolved v1.1 — 61-scenario integration test suite (soma-cli --test), 100% pass rate |
+| ~~No automated tests~~ | ~~Medium~~ | ✅ Resolved v1.2 — 70-scenario integration test suite (soma-cli --test), 100% pass rate |
 
 ---
 
@@ -108,12 +101,12 @@ These four primitives are what separate "Linux + AI chat" from an OS genuinely b
 |---|---|---|
 | Total workspace crates | 4 | Good separation |
 | soma-compositor/src/main.rs | 712 lines | ✅ Extracted in v1.0.1 (was 1,342) |
-| soma-compositor modules | 16 files | compositor.rs, event_handler.rs, settings_app.rs, config_loader.rs, sheets.rs, docs.rs added |
-| soma-agent capabilities | 13 modules (incl. docs, semantic_fs, sheets) | Healthy — typed errors on all modules |
+| soma-compositor modules | 18 files | media.rs added in v1.2; compositor.rs, event_handler.rs, settings_app.rs, config_loader.rs, sheets.rs, docs.rs added in prior versions |
+| soma-agent capabilities | 14 modules (incl. docs, semantic_fs, sheets, media) | Healthy — typed errors on all modules |
 | IPC reconnection | ✅ | Compositor detects `tx.is_closed()`, retries every 5s |
-| IPC message variants | 13 compositor→agent, 13 agent→compositor | Clean protocol |
+| IPC message variants | ~15 compositor→agent, ~15 agent→compositor | SessionScope + GetSessionStatus/SessionStatusResponse added in v1.2 |
 | Feature-gated backends | 2 (winit, drm) | Good architecture |
-| Test coverage | 0% | ⚠️ No tests at all |
+| Test coverage | 70 integration scenarios | ✅ 70/70 passing (soma-cli --test) |
 
 ---
 
@@ -124,8 +117,8 @@ v1.0    ━━━━━━━━━━━━━━━━━━━  DONE   Deskto
 v1.0.1  ━━━━━━               DONE   main.rs split + typed failure
 v1.0.2  ━━━━━━               DONE   Bug fix pass (dock, UTF-8, IPC reconnect, shared config loader)
 v1.1    ━━━━━━━━━━━━━━━━━━━  DONE   AgentAPI + dual-interface apps (sheets, docs) + semantic_fs
-v1.2    ━━━━━━━━━━━━━━        NEXT   Capability governance + advanced sessions + soma-media
-v1.3    ━━━━━━━━━━━━                  soma-media + parallel tasks
+v1.2    ━━━━━━━━━━━━━━━━━━━  DONE   Capability governance + session scope + semantic FS SQLite + soma-media
+v1.3    ━━━━━━━━━━━━          NEXT   soma-media backend (diffusion) + parallel task contexts
 v1.4    ━━━━━━━━━━                    Federation
 v2.0    ━━━━━━━━━━━━━━━               USB + plugin API
 ```
@@ -135,7 +128,7 @@ v2.0    ━━━━━━━━━━━━━━━               USB + plugin
 ## Key Design Questions (Open)
 
 1. ~~**What should `describe_state` return for a spreadsheet?**~~ ✅ Answered — `AppState { summary, cells }`: compact summary for orchestrator-level decisions + full cell map for worker reads.
-2. **How do human edits and agent writes coexist on the same data model?** v1.1 uses last-write-wins. Is that sufficient, or do we need OT/CRDT for parallel agents?
-3. **What does an agent session scope look like?** JSON config? Capability whitelist? Directory whitelist?
-4. **Should semantic FS metadata scale from sidecars to a central index?** Current impl uses `.soma-meta` sidecars (portable). A queryable `~/.soma/index.db` may be needed once file counts grow.
+2. **How do human edits and agent writes coexist on the same data model?** v1.2 adds session scope enforcement; last-write-wins still applies within a session. OT/CRDT deferred to v1.3.
+3. ~~**What does an agent session scope look like?**~~ ✅ Answered — `SessionScope { capability_whitelist, path_whitelist }` in soma-common; enforced in `ipc.rs` before each step. Remaining: compositor-side enforcement and parallel contexts (v1.3).
+4. ~~**Should semantic FS metadata scale from sidecars to a central index?**~~ ✅ Answered — SQLite at `~/.soma/index.db` (queryable, sidecar migration on first run).
 5. **When should the agent auto-recover from typed failure vs. escalate to HITL?** Low-risk retries auto; anything touching user data escalates.

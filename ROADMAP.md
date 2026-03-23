@@ -82,7 +82,7 @@
 - `CapabilityError { reason, context, alternatives }` — structured typed errors across all 11 capability modules; replaces raw strings
 - Agent can programmatically reason about failure: retry, escalate via HITL, or try an alternative path
 
-### v1.1 — AgentAPI + Dual-Interface Apps + Semantic FS ← THESIS MILESTONE ✅
+### v1.1 — AgentAPI + Dual-Interface Apps + Semantic FS ← THESIS MILESTONE ✅ COMPLETE
 
 **AgentAPI Core**
 - `NativeAppContent` trait: `describe_state`, `execute_action`, input/render hooks
@@ -118,29 +118,44 @@
 - **Shared config loader**: Duplicate `load_config_values()` extracted to `config_loader.rs`; both `sidebar.rs` and `settings_app.rs` now import it
 - **Nested unwraps**: Replaced silent `.unwrap()` on hardcoded CSS selectors (browser.rs) and socket address (network.rs) with descriptive `.expect()`
 
+### v1.2 — Capability Governance + Session Scope + Semantic FS SQLite + soma-media ✅ COMPLETE
+
+**Capability Governance**
+- `meta.list_governance`: lists all built-in + script capabilities with type/version/load metadata
+- `meta.promote`: generates a Rust stub at `~/.soma/promotions/<name>.rs` for script → built-in promotion
+- Sidebar Settings tab: Reload button for hot-reloading script capabilities from `~/.soma/capabilities/`
+
+**Advanced Session Model**
+- `SessionScope { capability_whitelist, path_whitelist }` in soma-common
+- `AgentModeStarted` carries `scope: Option<SessionScope>`
+- `GetSessionStatus` / `SessionStatusResponse` IPC round-trip
+- Scope enforcement in `ipc.rs`: capability + path whitelist checked before each step
+- `desktop_agent.start_agent_mode` accepts optional `scope`; `desktop_agent.get_session_status` added
+- Sidebar Chat tab shows active session card (task name + scope)
+
+**Semantic FS — SQLite backend**
+- `rusqlite` (bundled) replaces `.soma-meta` sidecar files
+- `~/.soma/index.db` with `files` table; best-effort migration from existing sidecars on first run
+- Same action interface (tag, annotate, find_by_intent, list_tagged, describe_file, get_history)
+
+**soma-media (third dual-interface app)**
+- `MediaApp` implementing `NativeAppContent`: prompt bar, image display, status strip
+- `media` capability: `generate` (command pattern), `describe`, `save`
+- Dock entry, `WindowContentType::Media`, event routing, Layer 0 fast-path patterns
+- Test suite: 61 → 70 scenarios (70/70 passing, 14 capability modules)
+
 ---
 
 ## Planned
 
-### v1.2 — Capability Governance + Advanced Sessions + soma-media
+### v1.3 — Parallel Task Contexts + soma-media Backend
 
-Building on the dual-interface pattern proven by v1.1:
-- Capability governance: hot-reload UI, version tracking, capability promotion (script → built-in)
-- Advanced session model: scope boundaries (capability whitelist, directory whitelist), parallel contexts
-- Semantic FS persistence: decide `.soma-meta` sidecars (portable) vs. `~/.soma/index.db` (queryable)
-- `soma-media`: image/video generation as a third dual-interface app (local diffusion)
-
-### v1.3 — Media + Generation + Parallel Task Contexts
-- `soma-media`: image/video generation pipeline (local diffusion)
-- Media as `AgentAPI` apps with structured state, not just chat cards
-- Agent capabilities: `generate_image`, `generate_video`, `generate_audio`
-
-**Agent-native primitive: Parallel Task Contexts**
-- Multiple concurrent agent sessions with isolated capability scopes
-- Human can see and interrupt any session from the dock/sidebar
-- Sessions share data through the semantic FS layer
+- `soma-media` backend: actual diffusion model integration replacing stub
+- Parallel Task Contexts: multiple concurrent agent sessions with isolated capability scopes
 - HITL queue aggregates approvals from all active sessions
 - IPC protocol extended with session IDs and scope tokens
+- Server-side session scope enforcement (compositor-enforced, not advisory)
+- Human can see and interrupt any session from the dock/sidebar
 
 ### v1.4 — Federation
 - Network IPC: TCP/TLS transport over the existing JSON socket protocol

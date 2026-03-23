@@ -1,6 +1,6 @@
 # CLAUDE.md — SomaOS
 
-> Read this before touching any code. Updated 2026-03-19 (v1.1 complete — AgentAPI + soma-sheets + soma-docs + semantic_fs, 61/61 tests passing).
+> Read this before touching any code. Updated 2026-03-22 (v1.2 complete — Capability Governance + Session Scope + Semantic FS SQLite + soma-media, 70/70 tests passing).
 
 ---
 
@@ -40,7 +40,41 @@ soma/               React + Tauri 2 macOS dev frontend
 
 ---
 
-## Current Version: v1.1 (as of 2026-03-19)
+## Current Version: v1.2 (as of 2026-03-22)
+
+### What was built in v1.2
+
+**Capability Governance**
+- `meta.list_governance`: lists all built-in + script capabilities with type/version/load metadata
+- `meta.promote`: generates a Rust stub at `~/.soma/promotions/<name>.rs` for promoting script caps to built-ins
+- Sidebar Settings tab: Reload button for hot-reloading script capabilities from `~/.soma/capabilities/`
+
+**Advanced Session Model**
+- `SessionScope { capability_whitelist: Option<Vec<String>>, path_whitelist: Option<Vec<String>> }` added to soma-common
+- `AgentModeStarted` now carries `scope: Option<SessionScope>`
+- `GetSessionStatus` / `SessionStatusResponse` IPC round-trip
+- Scope enforcement in `ipc.rs`: capability whitelist + path whitelist checked before each step execution
+- `desktop_agent.start_agent_mode` accepts optional `scope` param
+- `desktop_agent.get_session_status` action added
+- Sidebar Chat tab shows active session card (task name + scope)
+
+**Semantic FS — SQLite backend**
+- `rusqlite` (bundled) replaces `.soma-meta` sidecar files
+- `~/.soma/index.db`: SQLite database with `files` table (path, description, tags, created_by, created_at, history)
+- Best-effort migration from existing `.soma-meta` sidecar files on first run
+- Same `Capability` interface (action names/params unchanged) — only the storage backend changed
+
+**soma-media (third dual-interface app)**
+- `MediaApp` implementing `NativeAppContent`: prompt bar (top), image display (center), status strip (bottom)
+- `on_key("Enter")` submits prompt; `set_image` accepts base64 PNG bytes
+- `media` capability: `generate` (command pattern → `AppAction`), `describe`, `save`
+- `WindowContentType::Media`, dock entry, event routing in `event_handler.rs`
+- Layer 0 fast-path patterns for `media_generate`, `media_describe`, `media_save`
+
+**Test Suite**
+- 61 → 70 scenarios covering all 14 capability modules (70/70 passing)
+
+---
 
 ### What was built in v1.1
 
@@ -105,7 +139,7 @@ soma-agent (tokio → LlmProvider trait)
   ├── observer.rs: DesktopObserver (event recording, workflow patterns)
   └── capabilities/: filesystem, process, system, network, package,
                      browser, vision, meta, script, desktop_agent,
-                     sheets, docs, semantic_fs
+                     sheets, docs, semantic_fs, media
 ```
 
 ---
@@ -132,14 +166,16 @@ soma-agent (tokio → LlmProvider trait)
 | `soma-agent/src/intent.rs` | Tool call pipeline (Layer 0 fast path + provider.tool_call()) |
 | `soma-agent/src/ipc.rs` | Unix socket server, IPC message dispatch, BrowserUpdate/DesktopAction emission |
 | `soma-agent/src/observer.rs` | DesktopObserver, WorkflowPattern, observe/annotate/persist |
-| `soma-agent/src/capabilities/desktop_agent.rs` | 6-action desktop control (command pattern → IPC layer sends) |
-| `soma-agent/src/capabilities/meta.rs` | propose/list/gap-log for self-improvement loop |
+| `soma-agent/src/capabilities/desktop_agent.rs` | 7-action desktop control (command pattern → IPC layer sends); includes get_session_status |
+| `soma-agent/src/capabilities/meta.rs` | propose/list/gap-log/list_governance/promote for self-improvement loop + capability governance |
 | `soma-agent/src/capabilities/script.rs` | JSON-defined shell-template caps, hot-loaded from ~/.soma/capabilities/ |
 | `soma-agent/src/capabilities/sheets.rs` | 5-action spreadsheet control (create, describe, read_range, write_cell, apply_formula) |
 | `soma-agent/src/capabilities/docs.rs` | Document editing capability (create, describe, write_block, read_blocks) |
-| `soma-agent/src/capabilities/semantic_fs.rs` | File metadata, intent-based discovery (tag, annotate, find_by_intent, list_tagged, describe_file, get_history) |
+| `soma-agent/src/capabilities/semantic_fs.rs` | File metadata, intent-based discovery (tag, annotate, find_by_intent, list_tagged, describe_file, get_history) — SQLite-backed via rusqlite |
 | `soma-compositor/src/sheets.rs` | SheetsApp: dual-interface spreadsheet (NativeAppContent + formula evaluator + GUI) |
 | `soma-compositor/src/docs.rs` | DocsApp: dual-interface document editor (NativeAppContent + block model + GUI) |
+| `soma-compositor/src/media.rs` | MediaApp: dual-interface image generation (NativeAppContent + prompt bar + image display) |
+| `soma-agent/src/capabilities/media.rs` | media capability: generate/describe/save (command pattern for generate) |
 | `soma-common/src/lib.rs` | All shared IPC types (TaskPlan, BrowserUpdate, CompositorMessage, AgentMessage, AppState) |
 | `buildroot/soma_defconfig` | Buildroot OS config |
 | `.github/workflows/build.yml` | GitHub Actions CI (x86_64 + ARM64 image builds) |
@@ -221,13 +257,17 @@ This applies even if the session was read-only or exploratory — if understandi
 
 ## What's Next
 
-### Thesis Milestone: v1.2 — Capability Governance + Advanced Sessions
+### v1.3 — Parallel Task Contexts + soma-media Backend
 
-v1.1 proved the dual-interface pattern (soma-sheets, soma-docs, semantic_fs). Next:
-- Capability governance: hot-reload UI, version tracking, capability promotion from script → built-in
-- Advanced session model: scope boundaries (capability whitelist, directory whitelist), parallel contexts
-- Semantic FS persistence: decide sidecars (`.soma-meta`) vs. central index (`~/.soma/index.db`)
-- `soma-media`: image/video generation pipeline as a third dual-interface app
+v1.2 proved capability governance, session scope, SQLite semantic FS, and the soma-media dual-interface shell. Next:
+- `soma-media` backend: actual diffusion model integration (local Stable Diffusion or similar) replacing stub
+- Parallel Task Contexts: multiple concurrent agent sessions with isolated capability scopes, HITL queue aggregation, session IDs in IPC protocol
+- Server-side session scope enforcement (move from advisory/client-side to compositor-enforced)
+- Session scope UI: human can see and interrupt any active session from the dock/sidebar
+
+### v1.4 — Federation
+- Network IPC: TCP/TLS transport over the existing JSON socket protocol
+- Node registry, `delegate` capability, unified HITL queue on orchestrator
 
 ---
 
@@ -237,16 +277,17 @@ v1.1 proved the dual-interface pattern (soma-sheets, soma-docs, semantic_fs). Ne
 |---|---|---|
 | ~~`main.rs` complexity (1,342 lines)~~ | ~~**High**~~ | ✅ Resolved v1.0.1 — extracted to compositor.rs + event_handler.rs; main.rs is 712 lines |
 | ~~AgentAPI `describe_state` design~~ | ~~**High**~~ | ✅ Resolved v1.1 — SheetsApp + DocsApp prove the pattern; summary + full cells in AppState |
-| Human + agent editing same data model concurrently | **Medium** | v1.1 uses last-write-wins; monitor for conflicts; OT/CRDT deferred to v1.2 |
+| Human + agent editing same data model concurrently | **Medium** | v1.1 uses last-write-wins; v1.2 adds session scope enforcement; OT/CRDT deferred to v1.3 |
+| Session scope enforcement is advisory (client-side) | **Medium** | The agent enforces scope but a compromised agent could bypass it; server-side enforcement needed in v1.3 |
 | DynamicApp widget tree growing into a full UI framework | Medium | Keep minimal: status surfaces for agent, not apps for humans |
-| ~~No automated tests~~ | ~~Medium~~ | ✅ Resolved — 61-scenario integration test suite (soma-cli --test), 100% pass rate |
+| ~~No automated tests~~ | ~~Medium~~ | ✅ Resolved — 70-scenario integration test suite (soma-cli --test), 100% pass rate |
 
 ---
 
 ## Open Design Questions
 
 1. ~~What should `AgentAPI::describe_state` return for a spreadsheet?~~ ✅ Answered — `AppState { summary, cells }` with compact summary for orchestrators + full cell map for workers.
-2. How do human edits and agent writes coexist on the same data model? v1.1 uses last-write-wins. Is that sufficient, or do we need OT/CRDT for parallel agents?
-3. What does an agent session scope look like? JSON config? Capability whitelist? Directory whitelist?
-4. Should semantic FS metadata live as sidecars (`.soma-meta`) or in a central index (`~/.soma/index.db`)? Sidecars are portable; index is queryable.
+2. ~~How do human edits and agent writes coexist on the same data model?~~ v1.2 adds session scope enforcement; last-write-wins still applies within a session. OT/CRDT deferred to v1.3.
+3. ~~What does an agent session scope look like?~~ ✅ Answered — `SessionScope { capability_whitelist, path_whitelist }` in soma-common; enforced in `ipc.rs` before each step execution.
+4. ~~Should semantic FS metadata live as sidecars or a central index?~~ ✅ Answered — SQLite at `~/.soma/index.db` (queryable, sidecar migration on first run).
 5. When should the agent auto-recover from typed failure vs. escalate to HITL? Low-risk retries auto; anything touching user data escalates.
