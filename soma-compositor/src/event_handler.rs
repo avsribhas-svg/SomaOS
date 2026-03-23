@@ -51,6 +51,9 @@ pub fn open_or_focus_window(
         WindowContentType::Docs     => WindowContent::NativeApp(
             Box::new(crate::docs::DocsApp::new("Untitled Document"))
         ),
+        WindowContentType::Media    => WindowContent::NativeApp(
+            Box::new(crate::media::MediaApp::new("Soma Media"))
+        ),
     };
     let id = *next_id;
     *next_id += 1;
@@ -410,7 +413,7 @@ pub fn poll_agent_messages(
             soma_common::AgentMessage::ConfigUpdated { provider, model } => {
                 toasts.push(Toast::new(format!("Model: {} / {}", provider, model), [99, 102, 241, 255]));
             }
-            soma_common::AgentMessage::AgentModeStarted { task } => {
+            soma_common::AgentMessage::AgentModeStarted { task, .. } => {
                 *agent_mode = true;
                 *activity_text = task.clone();
             }

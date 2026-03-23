@@ -6,6 +6,7 @@ pub mod browser;
 pub mod desktop_agent;
 pub mod docs;
 pub mod filesystem;
+pub mod media;
 pub mod meta;
 pub mod network;
 pub mod package;
@@ -31,6 +32,7 @@ const BUILTIN_NAMES: &[&str] = &[
     "sheets",
     "docs",
     "semantic_fs",
+    "media",
 ];
 
 /// Trait that all capabilities must implement
@@ -77,8 +79,9 @@ impl CapabilityRegistry {
         registry.register(Box::new(meta::MetaCapability));
         registry.register(Box::new(desktop_agent::DesktopAgentCapability));
         registry.register(Box::new(sheets::SheetsCapability::new(state_cache.clone())));
-        registry.register(Box::new(docs::DocsCapability::new(state_cache)));
+        registry.register(Box::new(docs::DocsCapability::new(state_cache.clone())));
         registry.register(Box::new(semantic_fs::SemanticFsCapability));
+        registry.register(Box::new(media::MediaCapability::new(state_cache)));
 
         // Load any user-proposed capabilities from ~/.soma/capabilities/
         load_script_capabilities(&mut registry.capabilities);

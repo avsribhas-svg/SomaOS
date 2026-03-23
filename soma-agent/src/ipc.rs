@@ -1,6 +1,6 @@
 use log::{error, info, warn};
 use serde_json::json;
-use soma_common::{AgentMessage, AppState, CompositorMessage, TaskPlan, AGENT_SOCKET_PATH};
+use soma_common::{AgentMessage, AppState, CompositorMessage, SessionScope, SessionStatus, TaskPlan, AGENT_SOCKET_PATH};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -38,16 +38,33 @@ struct Session {
     started_at: std::time::SystemTime,
     steps: Vec<SessionStep>,
     affected_resources: Vec<String>,
+    scope: Option<SessionScope>,
 }
 
 impl Session {
-    fn new(task: &str) -> Self {
+    fn new(task: &str, scope: Option<SessionScope>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             task: task.to_string(),
             started_at: std::time::SystemTime::now(),
             steps: Vec::new(),
             affected_resources: Vec::new(),
+            scope,
+        }
+    }
+
+    fn to_status(&self) -> SessionStatus {
+        let started_at_unix = self.started_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        SessionStatus {
+            session_id: self.id.clone(),
+            task: self.task.clone(),
+            started_at_unix,
+            step_count: self.steps.len(),
+            scope: self.scope.clone(),
+            affected_resources: self.affected_resources.clone(),
         }
     }
 
@@ -255,6 +272,58 @@ async fn handle_message(
                 let mut results = Vec::new();
 
                 for (i, step) in plan.steps.iter().enumerate() {
+                    // Scope enforcement — check capability and path whitelists
+                    if let Some(ref session) = active_session {
+                        if let Some(ref scope) = session.scope {
+                            if let Some(ref whitelist) = scope.capability_whitelist {
+                                if !whitelist.contains(&step.capability) {
+                                    let scope_err = soma_common::CapabilityResult {
+                                        success: false,
+                                        data: serde_json::Value::Null,
+                                        error: Some(soma_common::CapabilityError::new(
+                                            soma_common::ErrorReason::PermissionDenied,
+                                            format!("Capability '{}' not in session scope whitelist", step.capability),
+                                        )),
+                                    };
+                                    let step_msg = AgentMessage::StepResult {
+                                        id: id.clone(),
+                                        step_index: i,
+                                        result: scope_err.clone(),
+                                    };
+                                    send_message(&step_msg, writer).await;
+                                    results.push(scope_err);
+                                    continue;
+                                }
+                            }
+                            if let Some(ref path_whitelist) = scope.path_whitelist {
+                                if ["filesystem", "process", "script"].contains(&step.capability.as_str()) {
+                                    let path = step.params.get("path")
+                                        .or_else(|| step.params.get("from"))
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    if !path.is_empty() && !path_whitelist.iter().any(|prefix| path.starts_with(prefix.as_str())) {
+                                        let scope_err = soma_common::CapabilityResult {
+                                            success: false,
+                                            data: serde_json::Value::Null,
+                                            error: Some(soma_common::CapabilityError::new(
+                                                soma_common::ErrorReason::PermissionDenied,
+                                                format!("Path '{}' not in session path whitelist", path),
+                                            )),
+                                        };
+                                        let step_msg = AgentMessage::StepResult {
+                                            id: id.clone(),
+                                            step_index: i,
+                                            result: scope_err.clone(),
+                                        };
+                                        send_message(&step_msg, writer).await;
+                                        results.push(scope_err);
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let result = executor.execute_step(step, registry);
                     info!(
                         "  Step {}: {}.{} → {}",
@@ -286,13 +355,17 @@ async fn handle_message(
                         }
                     }
 
-                    // Forward desktop_agent / sheets results as IPC messages
-                    if (step.capability == "desktop_agent" || step.capability == "sheets") && result.success {
+                    // Forward desktop_agent / sheets / docs / media results as IPC messages
+                    if (step.capability == "desktop_agent" || step.capability == "sheets"
+                        || step.capability == "docs" || step.capability == "media") && result.success {
                         // Session lifecycle via ipc_message type
                         let msg_type = result.data["ipc_message"].as_str().unwrap_or("");
                         if msg_type == "AgentModeStarted" {
                             let task = result.data["task"].as_str().unwrap_or("").to_string();
-                            *active_session = Some(Session::new(&task));
+                            // Parse optional scope from result data
+                            let scope: Option<SessionScope> = result.data.get("scope")
+                                .and_then(|s| serde_json::from_value(s.clone()).ok());
+                            *active_session = Some(Session::new(&task, scope));
                             info!("Session started: {}", task);
                         } else if msg_type == "AgentModeEnded" {
                             if let Some(session) = active_session.take() {
@@ -301,7 +374,7 @@ async fn handle_message(
                                 info!("Session persisted: {}", sid);
                             }
                         }
-                        forward_ipc_command(&result, observer, writer).await;
+                        forward_ipc_command(&result, observer, writer, active_session).await;
                     }
 
                     // Session step recording
@@ -426,25 +499,37 @@ async fn handle_message(
         }
 
         CompositorMessage::Ping => AgentMessage::Pong,
+
+        CompositorMessage::GetSessionStatus => {
+            let status = active_session.as_ref().map(|s| s.to_status());
+            AgentMessage::SessionStatusResponse { status }
+        }
     };
 
     send_message(&response, writer).await;
 }
 
 /// Forward a capability result that carries an `ipc_message` key as a real IPC message
-/// to the compositor. Handles desktop_agent and sheets command results.
+/// to the compositor. Handles desktop_agent, sheets, docs, and media command results.
 async fn forward_ipc_command(
     result: &soma_common::CapabilityResult,
     observer: &Arc<Mutex<DesktopObserver>>,
     writer: &Arc<Mutex<tokio::net::unix::OwnedWriteHalf>>,
+    active_session: &Option<Session>,
 ) {
     let msg_type = result.data["ipc_message"].as_str().unwrap_or("");
-    let agent_msg = match msg_type {
+    let agent_msg: Option<AgentMessage> = match msg_type {
         "AgentModeStarted" => {
             let task = result.data["task"].as_str().unwrap_or("").to_string();
-            Some(AgentMessage::AgentModeStarted { task })
+            let scope: Option<SessionScope> = result.data.get("scope")
+                .and_then(|s| serde_json::from_value(s.clone()).ok());
+            Some(AgentMessage::AgentModeStarted { task, scope })
         }
         "AgentModeEnded" => Some(AgentMessage::AgentModeEnded),
+        "GetSessionStatus" => {
+            let status = active_session.as_ref().map(|s| s.to_status());
+            Some(AgentMessage::SessionStatusResponse { status })
+        }
         "SpawnApp" => {
             let title = result.data["title"].as_str().unwrap_or("App").to_string();
             let app_id = result.data["app_id"].as_str().unwrap_or("app").to_string();

@@ -1,21 +1,23 @@
+//! SemanticFsCapability — SQLite-backed file metadata index.
+//!
+//! v1.2: replaced `.soma-meta` JSON sidecars with a central SQLite database at
+//! `~/.soma/index.db`.  Same capability interface (same action names + params) —
+//! only the storage backend changes.
+
 use serde_json::{json, Value};
 use soma_common::{CapabilityError, ErrorReason, ActionSchema, CapabilityResult};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::param;
-use super::Capability;
+use super::{param, Capability};
 
 pub struct SemanticFsCapability;
 
 impl Capability for SemanticFsCapability {
-    fn name(&self) -> &str {
-        "semantic_fs"
-    }
+    fn name(&self) -> &str { "semantic_fs" }
 
     fn description(&self) -> &str {
-        "Semantic file system — tag files, find by intent, annotate with workflow history"
+        "Semantic file system — tag files, find by intent, annotate with workflow history (SQLite-backed index)"
     }
 
     fn actions(&self) -> Vec<ActionSchema> {
@@ -31,7 +33,7 @@ impl Capability for SemanticFsCapability {
             },
             ActionSchema {
                 name: "describe_file".to_string(),
-                description: "Get metadata and semantic sidecar info for a file".to_string(),
+                description: "Get metadata and semantic index info for a file".to_string(),
                 params: vec![
                     param("path", "string", true, "Absolute path to the file"),
                 ],
@@ -46,7 +48,7 @@ impl Capability for SemanticFsCapability {
             },
             ActionSchema {
                 name: "annotate".to_string(),
-                description: "Annotate a file with a workflow name and agent note; increments access_count".to_string(),
+                description: "Annotate a file with a workflow name and agent note".to_string(),
                 params: vec![
                     param("path", "string", true, "Absolute path to the file"),
                     param("workflow", "string", false, "Workflow name to record"),
@@ -55,7 +57,7 @@ impl Capability for SemanticFsCapability {
             },
             ActionSchema {
                 name: "get_history".to_string(),
-                description: "Return the full sidecar (tags, workflows, notes, timestamps) for a file".to_string(),
+                description: "Return the full index record (tags, history, timestamps) for a file".to_string(),
                 params: vec![
                     param("path", "string", true, "Absolute path to the file"),
                 ],
@@ -65,7 +67,7 @@ impl Capability for SemanticFsCapability {
                 description: "List all files that carry a given tag".to_string(),
                 params: vec![
                     param("tag", "string", true, "Tag to search for"),
-                    param("search_dir", "string", false, "Directory to search under (default: ~/)"),
+                    param("search_dir", "string", false, "Directory prefix to restrict results"),
                 ],
             },
         ]
@@ -73,12 +75,12 @@ impl Capability for SemanticFsCapability {
 
     fn execute(&self, action: &str, params: &Value) -> CapabilityResult {
         match action {
-            "tag"             => self.tag(params),
-            "describe_file"   => self.describe_file(params),
-            "find_by_intent"  => self.find_by_intent(params),
-            "annotate"        => self.annotate(params),
-            "get_history"     => self.get_history(params),
-            "list_tagged"     => self.list_tagged(params),
+            "tag"            => self.tag(params),
+            "describe_file"  => self.describe_file(params),
+            "find_by_intent" => self.find_by_intent(params),
+            "annotate"       => self.annotate(params),
+            "get_history"    => self.get_history(params),
+            "list_tagged"    => self.list_tagged(params),
             _ => CapabilityResult {
                 success: false,
                 data: Value::Null,
@@ -89,6 +91,104 @@ impl Capability for SemanticFsCapability {
             },
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// SQLite helpers
+// ---------------------------------------------------------------------------
+
+fn db_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    PathBuf::from(home).join(".soma").join("index.db")
+}
+
+fn open_db() -> Result<rusqlite::Connection, String> {
+    let path = db_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let conn = rusqlite::Connection::open(&path).map_err(|e| e.to_string())?;
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS files (
+            path        TEXT PRIMARY KEY,
+            description TEXT DEFAULT '',
+            tags        TEXT DEFAULT '',
+            created_by  TEXT DEFAULT 'agent',
+            created_at  INTEGER,
+            history     TEXT DEFAULT '[]'
+        );"
+    ).map_err(|e| e.to_string())?;
+
+    // Best-effort migration from old .soma-meta sidecars
+    migrate_sidecars_if_needed(&conn);
+
+    Ok(conn)
+}
+
+/// One-time migration: if the DB was just created (0 rows), scan for old
+/// `.soma-meta/*.json` sidecar files and import them into the DB.
+fn migrate_sidecars_if_needed(conn: &rusqlite::Connection) {
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+        .unwrap_or(1); // if query fails, assume non-empty (safe default)
+    if count > 0 {
+        return; // already populated — skip migration
+    }
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let home_path = std::path::Path::new(&home);
+    import_sidecars_recursive(conn, home_path, 0, 5);
+}
+
+fn import_sidecars_recursive(
+    conn: &rusqlite::Connection,
+    dir: &std::path::Path,
+    depth: usize,
+    max_depth: usize,
+) {
+    if depth > max_depth { return; }
+    let meta_dir = dir.join(".soma-meta");
+    if meta_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&meta_dir) {
+            for entry in entries.flatten() {
+                let ep = entry.path();
+                if ep.extension().map(|x| x == "json").unwrap_or(false) {
+                    if let Ok(raw) = std::fs::read_to_string(&ep) {
+                        if let Ok(v) = serde_json::from_str::<Value>(&raw) {
+                            let path = v["path"].as_str().unwrap_or("").to_string();
+                            if path.is_empty() { continue; }
+                            let description = v["description"].as_str().unwrap_or("").to_string();
+                            let tags: Vec<String> = v["tags"].as_array()
+                                .map(|a| a.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect())
+                                .unwrap_or_default();
+                            let tags_str = tags.join(",");
+                            let now = now_unix();
+                            let _ = conn.execute(
+                                "INSERT OR IGNORE INTO files (path, description, tags, created_by, created_at, history) VALUES (?1, ?2, ?3, 'agent', ?4, '[]')",
+                                rusqlite::params![path, description, tags_str, now],
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let ep = entry.path();
+            if ep.is_dir() {
+                let name = ep.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                if name.starts_with('.') { continue; }
+                import_sidecars_recursive(conn, &ep, depth + 1, max_depth);
+            }
+        }
+    }
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -105,43 +205,53 @@ impl SemanticFsCapability {
 
         let new_tags: Vec<String> = match params.get("tags").and_then(|v| v.as_array()) {
             Some(arr) => arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect(),
-            None => return err("Missing required param: tags"),
+            None => {
+                // Also accept a single string tag or "label" param
+                if let Some(label) = params.get("label").and_then(|v| v.as_str()) {
+                    vec![label.to_string()]
+                } else {
+                    return err("Missing required param: tags (array) or label (string)");
+                }
+            }
         };
-        let description = params.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("");
 
-        let sp = sidecar_path(&path);
-        let mut sidecar = load_sidecar(&sp).unwrap_or_else(|| new_sidecar(&path));
+        let conn = match open_db() {
+            Ok(c) => c,
+            Err(e) => return err(&format!("DB open error: {}", e)),
+        };
 
-        // Merge tags (deduplicate)
-        let existing: Vec<String> = sidecar["tags"]
-            .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-            .unwrap_or_default();
-        let mut merged = existing;
+        // Fetch existing tags
+        let existing_tags: String = conn.query_row(
+            "SELECT COALESCE(tags, '') FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |r| r.get(0),
+        ).unwrap_or_default();
+
+        let mut merged: Vec<String> = if existing_tags.is_empty() {
+            Vec::new()
+        } else {
+            existing_tags.split(',').map(|s| s.to_string()).collect()
+        };
         for t in &new_tags {
             if !merged.contains(t) {
                 merged.push(t.clone());
             }
         }
-        sidecar["tags"] = json!(merged);
-
-        if let Some(desc) = description {
-            sidecar["description"] = json!(desc);
-        }
-
+        let tags_str = merged.join(",");
         let now = now_unix();
-        sidecar["last_tagged_at"] = json!(now);
-        sidecar["tagged_by"] = json!("agent");
 
-        if let Err(e) = save_sidecar(&sp, &sidecar) {
-            return err(&format!("Failed to save sidecar: {}", e));
+        match conn.execute(
+            "INSERT INTO files (path, description, tags, created_by, created_at, history)
+             VALUES (?1, ?2, ?3, 'agent', ?4, '[]')
+             ON CONFLICT(path) DO UPDATE SET
+               tags        = excluded.tags,
+               description = CASE WHEN excluded.description != '' THEN excluded.description ELSE description END",
+            rusqlite::params![path, description, tags_str, now],
+        ) {
+            Ok(_) => ok(json!({ "path": path, "tags": merged })),
+            Err(e) => err(&format!("DB write error: {}", e)),
         }
-
-        ok(json!({
-            "path": path,
-            "tags": sidecar["tags"],
-            "sidecar": sp.to_string_lossy(),
-        }))
     }
 
     fn describe_file(&self, params: &Value) -> CapabilityResult {
@@ -151,9 +261,9 @@ impl SemanticFsCapability {
         };
         if let Err(e) = guard_traversal(&path) { return e; }
 
-        let exists = Path::new(&path).exists();
+        let exists = std::path::Path::new(&path).exists();
         let (size, modified_unix) = if exists {
-            match fs::metadata(&path) {
+            match std::fs::metadata(&path) {
                 Ok(m) => {
                     let modified = m.modified().ok()
                         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -166,20 +276,56 @@ impl SemanticFsCapability {
             (0u64, None)
         };
 
-        let sp = sidecar_path(&path);
-        let sidecar = load_sidecar(&sp).unwrap_or_else(|| new_sidecar(&path));
+        let conn = match open_db() {
+            Ok(c) => c,
+            Err(e) => return err(&format!("DB open error: {}", e)),
+        };
 
-        ok(json!({
-            "path": path,
-            "exists": exists,
-            "size": size,
-            "modified_unix": modified_unix,
-            "tags": sidecar["tags"],
-            "description": sidecar["description"],
-            "created_by": sidecar["created_by"],
-            "workflows": sidecar["workflows"],
-            "access_count": sidecar["access_count"],
-        }))
+        let row = conn.query_row(
+            "SELECT description, tags, created_by, created_at, history FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, u64>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            },
+        );
+
+        match row {
+            Ok((description, tags_str, created_by, created_at, history_str)) => {
+                let tags: Vec<&str> = tags_str.split(',').filter(|s| !s.is_empty()).collect();
+                let history: Value = serde_json::from_str(&history_str).unwrap_or(json!([]));
+                ok(json!({
+                    "path": path,
+                    "exists": exists,
+                    "size": size,
+                    "modified_unix": modified_unix,
+                    "description": description,
+                    "tags": tags,
+                    "created_by": created_by,
+                    "created_at": created_at,
+                    "history": history,
+                }))
+            }
+            Err(_) => {
+                // Not in DB — return file metadata only
+                ok(json!({
+                    "path": path,
+                    "exists": exists,
+                    "size": size,
+                    "modified_unix": modified_unix,
+                    "description": "",
+                    "tags": [],
+                    "created_by": null,
+                    "created_at": null,
+                    "history": [],
+                }))
+            }
+        }
     }
 
     fn find_by_intent(&self, params: &Value) -> CapabilityResult {
@@ -191,81 +337,63 @@ impl SemanticFsCapability {
             .get("search_dir")
             .and_then(|v| v.as_str())
             .map(expand_tilde)
-            .unwrap_or_else(|| {
-                std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
-            });
+            .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".to_string()));
         if let Err(e) = guard_traversal(&search_dir) { return e; }
 
-        let intent_words: Vec<&str> = intent.split_whitespace().collect();
-        let now = now_unix();
-        let seven_days: u64 = 7 * 24 * 3600;
+        let conn = match open_db() {
+            Ok(c) => c,
+            Err(e) => return err(&format!("DB open error: {}", e)),
+        };
 
-        let mut results: Vec<(i64, Value)> = Vec::new();
+        let pattern = format!("%{}%", intent);
+        let mut stmt = match conn.prepare(
+            "SELECT path, description, tags FROM files
+             WHERE (description LIKE ?1 OR tags LIKE ?2)
+             LIMIT 50"
+        ) {
+            Ok(s) => s,
+            Err(e) => return err(&format!("DB query error: {}", e)),
+        };
 
-        collect_sidecars(Path::new(&search_dir), 0, 4, &mut |sidecar_file, sidecar| {
-            let file_path = sidecar["path"].as_str().unwrap_or("").to_string();
-            let filename = Path::new(&file_path)
+        let rows: Vec<(String, String, String)> = match stmt.query_map(
+            rusqlite::params![pattern, pattern],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+        ) {
+            Ok(mapped) => mapped.flatten().collect(),
+            Err(_) => Vec::new(),
+        };
+
+        let mut results: Vec<(i64, Value)> = rows.into_iter()
+        .filter(|(path, _, _)| search_dir == "/" || path.starts_with(&search_dir))
+        .map(|(path, description, tags_str)| {
+            let tags: Vec<String> = tags_str.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+            let mut score: i64 = 0;
+            for tag in &tags {
+                if intent.contains(&tag.to_lowercase()) || tag.to_lowercase().contains(&intent) {
+                    score += 3;
+                }
+            }
+            for word in intent.split_whitespace() {
+                if description.to_lowercase().contains(word) { score += 1; }
+            }
+            let fname = std::path::Path::new(&path)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
-            let tags: Vec<String> = sidecar["tags"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_lowercase())).collect())
-                .unwrap_or_default();
-            let description = sidecar["description"].as_str().unwrap_or("").to_lowercase();
-            let access_count = sidecar["access_count"].as_u64().unwrap_or(0);
-            let last_accessed = sidecar["last_accessed"].as_u64().unwrap_or(0);
-
-            let mut score: i64 = 0;
-
-            // Tag match: +3 per tag word found in intent
-            for tag in &tags {
-                let tag_words: Vec<&str> = tag.split_whitespace().collect();
-                for tw in &tag_words {
-                    if intent.contains(*tw) {
-                        score += 3;
-                    }
-                }
+            for word in intent.split_whitespace() {
+                if fname.contains(word) { score += 2; }
             }
+            (score, json!({
+                "path": path,
+                "score": score,
+                "tags": tags,
+                "description": description,
+            }))
+        })
+        .collect();
 
-            // Description match: +1 per intent word found in description
-            for iw in &intent_words {
-                if description.contains(iw) {
-                    score += 1;
-                }
-            }
-
-            // Filename match: +2 per intent word found in filename
-            for iw in &intent_words {
-                if filename.contains(iw) {
-                    score += 2;
-                }
-            }
-
-            // Recent access bonus
-            if access_count > 0 {
-                score += 1;
-            }
-            if last_accessed > 0 && now.saturating_sub(last_accessed) <= seven_days {
-                score += 2;
-            }
-
-            if score > 0 {
-                results.push((score, json!({
-                    "path": file_path,
-                    "score": score,
-                    "tags": sidecar["tags"],
-                    "description": sidecar["description"],
-                })));
-            }
-
-            let _ = sidecar_file; // used by the closure signature
-        });
-
-        // Sort descending by score, take top 5
         results.sort_by(|a, b| b.0.cmp(&a.0));
         let top5: Vec<Value> = results.into_iter().take(5).map(|(_, v)| v).collect();
-
         ok(json!({ "intent": intent, "matches": top5 }))
     }
 
@@ -279,51 +407,47 @@ impl SemanticFsCapability {
         let workflow   = params.get("workflow").and_then(|v| v.as_str()).map(|s| s.to_string());
         let agent_note = params.get("agent_note").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-        let sp = sidecar_path(&path);
-        let mut sidecar = load_sidecar(&sp).unwrap_or_else(|| new_sidecar(&path));
+        let conn = match open_db() {
+            Ok(c) => c,
+            Err(e) => return err(&format!("DB open error: {}", e)),
+        };
 
+        // Ensure row exists
         let now = now_unix();
+        conn.execute(
+            "INSERT OR IGNORE INTO files (path, description, tags, created_by, created_at, history) VALUES (?1, '', '', 'agent', ?2, '[]')",
+            rusqlite::params![path, now],
+        ).ok();
 
-        // Append workflow (ring-buffer max 20)
-        if let Some(wf) = &workflow {
-            let mut workflows: Vec<String> = sidecar["workflows"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                .unwrap_or_default();
-            workflows.push(wf.clone());
-            if workflows.len() > 20 {
-                workflows.drain(0..workflows.len() - 20);
-            }
-            sidecar["workflows"] = json!(workflows);
+        // Fetch current history
+        let history_str: String = conn.query_row(
+            "SELECT COALESCE(history, '[]') FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |r| r.get(0),
+        ).unwrap_or_else(|_| "[]".to_string());
+
+        let mut history: Vec<Value> = serde_json::from_str(&history_str).unwrap_or_default();
+
+        let entry = json!({
+            "timestamp": now,
+            "workflow": workflow,
+            "agent_note": agent_note,
+        });
+        history.push(entry);
+        // Ring buffer — keep last 20 entries
+        if history.len() > 20 {
+            history.drain(0..history.len() - 20);
         }
 
-        // Append agent note (ring-buffer max 10)
-        if let Some(note) = &agent_note {
-            let mut notes: Vec<String> = sidecar["agent_notes"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                .unwrap_or_default();
-            notes.push(note.clone());
-            if notes.len() > 10 {
-                notes.drain(0..notes.len() - 10);
-            }
-            sidecar["agent_notes"] = json!(notes);
+        let new_history = serde_json::to_string(&history).unwrap_or_else(|_| "[]".to_string());
+
+        match conn.execute(
+            "UPDATE files SET history = ?1 WHERE path = ?2",
+            rusqlite::params![new_history, path],
+        ) {
+            Ok(_) => ok(json!({ "path": path, "history_entries": history.len() })),
+            Err(e) => err(&format!("DB update error: {}", e)),
         }
-
-        // Increment access_count, update last_accessed
-        let access_count = sidecar["access_count"].as_u64().unwrap_or(0) + 1;
-        sidecar["access_count"] = json!(access_count);
-        sidecar["last_accessed"] = json!(now);
-
-        if let Err(e) = save_sidecar(&sp, &sidecar) {
-            return err(&format!("Failed to save sidecar: {}", e));
-        }
-
-        ok(json!({
-            "path": path,
-            "workflows": sidecar["workflows"],
-            "access_count": access_count,
-        }))
     }
 
     fn get_history(&self, params: &Value) -> CapabilityResult {
@@ -333,15 +457,43 @@ impl SemanticFsCapability {
         };
         if let Err(e) = guard_traversal(&path) { return e; }
 
-        let sp = sidecar_path(&path);
-        match load_sidecar(&sp) {
-            Some(sidecar) => ok(sidecar),
-            None => CapabilityResult {
+        let conn = match open_db() {
+            Ok(c) => c,
+            Err(e) => return err(&format!("DB open error: {}", e)),
+        };
+
+        match conn.query_row(
+            "SELECT path, description, tags, created_by, created_at, history FROM files WHERE path = ?1",
+            rusqlite::params![path],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, u64>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            },
+        ) {
+            Ok((p, description, tags_str, created_by, created_at, history_str)) => {
+                let tags: Vec<&str> = tags_str.split(',').filter(|s| !s.is_empty()).collect();
+                let history: Value = serde_json::from_str(&history_str).unwrap_or(json!([]));
+                ok(json!({
+                    "path": p,
+                    "description": description,
+                    "tags": tags,
+                    "created_by": created_by,
+                    "created_at": created_at,
+                    "history": history,
+                }))
+            }
+            Err(_) => CapabilityResult {
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(
                     ErrorReason::NotFound,
-                    format!("No sidecar found for '{}'", path),
+                    format!("No index entry found for '{}'", path),
                 )),
             },
         }
@@ -356,130 +508,46 @@ impl SemanticFsCapability {
             .get("search_dir")
             .and_then(|v| v.as_str())
             .map(expand_tilde)
-            .unwrap_or_else(|| {
-                std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
-            });
-        if let Err(e) = guard_traversal(&search_dir) { return e; }
+            .unwrap_or_else(|| "/".to_string());
 
-        let tag_lc = tag.to_lowercase();
-        let mut matches: Vec<Value> = Vec::new();
+        let conn = match open_db() {
+            Ok(c) => c,
+            Err(e) => return err(&format!("DB open error: {}", e)),
+        };
 
-        collect_sidecars(Path::new(&search_dir), 0, 4, &mut |_sidecar_file, sidecar| {
-            let tags: Vec<String> = sidecar["tags"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_lowercase())).collect())
-                .unwrap_or_default();
-            if tags.iter().any(|t| t == &tag_lc) {
-                matches.push(json!({
-                    "path": sidecar["path"],
-                    "tags": sidecar["tags"],
-                    "description": sidecar["description"],
-                }));
-            }
-        });
+        let pattern = format!("%{}%", tag.to_lowercase());
+        let mut stmt = match conn.prepare(
+            "SELECT path, description, tags FROM files WHERE LOWER(tags) LIKE ?1"
+        ) {
+            Ok(s) => s,
+            Err(e) => return err(&format!("DB query error: {}", e)),
+        };
 
-        ok(json!({ "tag": tag, "matches": matches, "count": matches.len() }))
+        let rows: Vec<(String, String, String)> = match stmt.query_map(
+            rusqlite::params![pattern],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+        ) {
+            Ok(mapped) => mapped.flatten().collect(),
+            Err(_) => Vec::new(),
+        };
+
+        let matches: Vec<Value> = rows.into_iter()
+        .filter(|(path, _, _)| search_dir == "/" || path.starts_with(&search_dir))
+        .map(|(path, description, tags_str)| {
+            let tags: Vec<String> = tags_str.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+            json!({ "path": path, "description": description, "tags": tags })
+        })
+        .collect();
+
+        let count = matches.len();
+        ok(json!({ "tag": tag, "matches": matches, "count": count }))
     }
 }
 
 // ---------------------------------------------------------------------------
-// Sidecar helpers
+// Security helpers
 // ---------------------------------------------------------------------------
 
-/// Compute the sidecar path for a given file path.
-/// The sidecar lives at `<parent_dir>/.soma-meta/<filename>.json`.
-fn sidecar_path(file_path: &str) -> PathBuf {
-    let p = Path::new(file_path);
-    let dir = p.parent().unwrap_or(Path::new("."));
-    let name = p.file_name().unwrap_or_default();
-    dir.join(".soma-meta").join(format!("{}.json", name.to_string_lossy()))
-}
-
-/// Load a sidecar JSON file. Returns None if the file does not exist or is invalid.
-fn load_sidecar(sp: &Path) -> Option<Value> {
-    let raw = fs::read_to_string(sp).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-/// Persist a sidecar JSON to disk, creating the `.soma-meta` directory if necessary.
-fn save_sidecar(sp: &Path, sidecar: &Value) -> Result<(), String> {
-    if let Some(parent) = sp.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let raw = serde_json::to_string_pretty(sidecar).map_err(|e| e.to_string())?;
-    fs::write(sp, raw).map_err(|e| e.to_string())
-}
-
-/// Create a default (empty) sidecar for a file path.
-fn new_sidecar(file_path: &str) -> Value {
-    json!({
-        "path": file_path,
-        "created_by": "agent",
-        "created_at": now_unix(),
-        "tags": [],
-        "description": "",
-        "workflows": [],
-        "agent_notes": [],
-        "access_count": 0,
-        "last_accessed": 0,
-        "last_tagged_at": 0,
-        "tagged_by": "agent",
-    })
-}
-
-/// Return the current time as seconds since UNIX_EPOCH.
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-/// Recursively scan directories for `.soma-meta/*.json` sidecar files, up to `max_depth`.
-/// Calls `callback` for each valid sidecar with (sidecar_file_path, sidecar_value).
-fn collect_sidecars<F>(dir: &Path, depth: usize, max_depth: usize, callback: &mut F)
-where
-    F: FnMut(&Path, &Value),
-{
-    if depth > max_depth {
-        return;
-    }
-
-    // Check for a .soma-meta directory at the current level
-    let meta_dir = dir.join(".soma-meta");
-    if meta_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&meta_dir) {
-            for entry in entries.flatten() {
-                let ep = entry.path();
-                if ep.extension().map(|x| x == "json").unwrap_or(false) {
-                    if let Some(sidecar) = load_sidecar(&ep) {
-                        callback(&ep, &sidecar);
-                    }
-                }
-            }
-        }
-    }
-
-    // Recurse into subdirectories (skip hidden dirs and .soma-meta itself)
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let ep = entry.path();
-            if ep.is_dir() {
-                let name = ep.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                if name.starts_with('.') {
-                    continue; // skip hidden dirs
-                }
-                collect_sidecars(&ep, depth + 1, max_depth, callback);
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Security helpers (copied from filesystem.rs — private in sibling module)
-// ---------------------------------------------------------------------------
-
-/// Expand a leading `~` to the HOME directory.
 fn expand_tilde(path: &str) -> String {
     if path == "~" || path.starts_with("~/") {
         if let Ok(home) = std::env::var("HOME") {
@@ -489,7 +557,6 @@ fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
-/// Reject paths containing `..` components to prevent path traversal attacks.
 fn guard_traversal(path: &str) -> Result<(), CapabilityResult> {
     if path.split(['/', '\\']).any(|c| c == "..") {
         Err(CapabilityResult {
@@ -510,11 +577,7 @@ fn guard_traversal(path: &str) -> Result<(), CapabilityResult> {
 // ---------------------------------------------------------------------------
 
 fn ok(data: Value) -> CapabilityResult {
-    CapabilityResult {
-        success: true,
-        data,
-        error: None,
-    }
+    CapabilityResult { success: true, data, error: None }
 }
 
 fn err(msg: &str) -> CapabilityResult {

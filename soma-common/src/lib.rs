@@ -183,6 +183,8 @@ pub enum CompositorMessage {
     ReloadCapabilities,
     /// Request current capability registry snapshot (for UI)
     QueryCapabilities,
+    /// Request current session status from agent
+    GetSessionStatus,
 }
 
 /// Messages sent from the agent daemon to the compositor (or CLI)
@@ -217,7 +219,9 @@ pub enum AgentMessage {
     /// Active provider configuration was updated
     ConfigUpdated { provider: String, model: String },
     /// Agent is starting desktop agent mode
-    AgentModeStarted { task: String },
+    AgentModeStarted { task: String, scope: Option<SessionScope> },
+    /// Response to desktop_agent.get_session_status
+    SessionStatusResponse { status: Option<SessionStatus> },
     /// Agent has finished desktop agent mode
     AgentModeEnded,
     /// Spawn a new DynamicApp floating window from a JSON widget tree
@@ -268,6 +272,30 @@ pub struct AppState {
     pub cells: Option<Value>,
     /// True if there are unsaved / uncommitted changes
     pub dirty: bool,
+}
+
+// ──────────────────────────────────────────────
+//  Session scope + status (v1.2)
+// ──────────────────────────────────────────────
+
+/// Restricts what the agent can do during a scoped agent-mode session.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SessionScope {
+    /// None = all capabilities allowed; Some(list) = whitelist
+    pub capability_whitelist: Option<Vec<String>>,
+    /// None = any path; Some(list) = allowed path prefixes (agent enforces this)
+    pub path_whitelist: Option<Vec<String>>,
+}
+
+/// Snapshot of a running agent session — for sidebar display and agent queries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStatus {
+    pub session_id: String,
+    pub task: String,
+    pub started_at_unix: u64,
+    pub step_count: usize,
+    pub scope: Option<SessionScope>,
+    pub affected_resources: Vec<String>,
 }
 
 // ──────────────────────────────────────────────

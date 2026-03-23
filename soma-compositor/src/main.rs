@@ -9,6 +9,7 @@ mod event_handler;
 mod input;
 mod ipc_client;
 mod login;
+mod media;
 mod renderer;
 mod settings_app;
 mod sheets;

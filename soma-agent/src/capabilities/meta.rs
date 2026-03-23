@@ -49,14 +49,28 @@ impl Capability for MetaCapability {
                     param("gap", "string", true, "Description of the missing capability"),
                 ],
             },
+            ActionSchema {
+                name: "list_governance".to_string(),
+                description: "List ALL registered capabilities (built-in and script) with their type, version, and action count.".to_string(),
+                params: vec![],
+            },
+            ActionSchema {
+                name: "promote".to_string(),
+                description: "Promote a script capability to a Rust stub for built-in promotion. Reads ~/.soma/capabilities/<name>.json and generates a Rust stub at ~/.soma/promotions/<name>.rs.".to_string(),
+                params: vec![
+                    param("name", "string", true, "Name of the script capability to promote"),
+                ],
+            },
         ]
     }
 
     fn execute(&self, action: &str, params: &Value) -> CapabilityResult {
         match action {
-            "propose" => execute_propose(params),
-            "list_proposed" => execute_list_proposed(),
-            "describe_gap" => execute_describe_gap(params),
+            "propose"         => execute_propose(params),
+            "list_proposed"   => execute_list_proposed(),
+            "describe_gap"    => execute_describe_gap(params),
+            "list_governance" => execute_list_governance(),
+            "promote"         => execute_promote(params),
             _ => CapabilityResult {
                 success: false,
                 data: Value::Null,
@@ -206,6 +220,140 @@ fn execute_list_proposed() -> CapabilityResult {
             error: None,
         },
     }
+}
+
+/// BUILTIN_NAMES list (mirrors mod.rs BUILTIN_NAMES for governance listing).
+const BUILTIN_NAMES: &[&str] = &[
+    "filesystem", "process", "system", "network", "package",
+    "browser", "vision", "meta", "desktop_agent",
+    "sheets", "docs", "semantic_fs", "media",
+];
+
+/// List all capabilities — built-ins from BUILTIN_NAMES + script caps from disk.
+fn execute_list_governance() -> CapabilityResult {
+    let mut capabilities: Vec<serde_json::Value> = BUILTIN_NAMES
+        .iter()
+        .map(|name| serde_json::json!({
+            "name": name,
+            "type": "builtin",
+            "version": "1.0.0",
+        }))
+        .collect();
+
+    // Scan ~/.soma/capabilities/ for script caps
+    let dir = capabilities_dir();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|x| x == "json").unwrap_or(false) {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(def) = serde_json::from_str::<ScriptCapabilityDef>(&content) {
+                        capabilities.push(serde_json::json!({
+                            "name": def.name,
+                            "type": "script",
+                            "version": "1.0.0",
+                            "action_count": def.actions.len(),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    CapabilityResult {
+        success: true,
+        data: serde_json::json!({ "capabilities": capabilities, "total": capabilities.len() }),
+        error: None,
+    }
+}
+
+/// Promote a script capability: load its JSON and generate a Rust stub.
+fn execute_promote(params: &Value) -> CapabilityResult {
+    let name = match params["name"].as_str() {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => return CapabilityResult {
+            success: false,
+            data: Value::Null,
+            error: Some(CapabilityError::new(ErrorReason::MissingParam, "'name' is required")),
+        },
+    };
+
+    let cap_path = capabilities_dir().join(format!("{}.json", name));
+    let content = match std::fs::read_to_string(&cap_path) {
+        Ok(c) => c,
+        Err(_) => return CapabilityResult {
+            success: false,
+            data: Value::Null,
+            error: Some(CapabilityError::new(ErrorReason::NotFound, format!("No script capability '{}' found", name))),
+        },
+    };
+    let def: ScriptCapabilityDef = match serde_json::from_str(&content) {
+        Ok(d) => d,
+        Err(e) => return CapabilityResult {
+            success: false,
+            data: Value::Null,
+            error: Some(CapabilityError::new(ErrorReason::InvalidParam, format!("Invalid JSON: {}", e))),
+        },
+    };
+
+    // Generate Rust stub
+    let struct_name = to_pascal_case(&name);
+    let mut stub = format!(
+        "//! Auto-generated stub for '{}' capability.\n//! Promote this to soma-agent/src/capabilities/{}.rs\n//! and fill in the execute() arms.\n\nuse serde_json::{{json, Value}};\nuse soma_common::{{ActionSchema, CapabilityError, CapabilityResult, ErrorReason}};\nuse super::{{param, Capability}};\n\npub struct {};\n\nimpl Capability for {} {{\n    fn name(&self) -> &str {{ \"{}\" }}\n    fn description(&self) -> &str {{ \"{}\" }}\n\n    fn actions(&self) -> Vec<ActionSchema> {{\n        vec![\n",
+        name, name, struct_name, struct_name, name, def.description
+    );
+    for action in &def.actions {
+        stub.push_str(&format!(
+            "            // Shell template: {}\n            ActionSchema {{ name: \"{}\".to_string(), description: \"{}\".to_string(), params: vec![] }},\n",
+            action.shell_template,
+            action.name, action.description
+        ));
+    }
+    stub.push_str("        ]\n    }\n\n    fn execute(&self, action: &str, params: &Value) -> CapabilityResult {\n        match action {\n");
+    for action in &def.actions {
+        stub.push_str(&format!(
+            "            \"{}\" => CapabilityResult {{ success: false, data: Value::Null, error: Some(CapabilityError::new(ErrorReason::InternalError, \"not implemented — fill in\")) }},\n",
+            action.name
+        ));
+    }
+    stub.push_str("            _ => CapabilityResult { success: false, data: Value::Null, error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!(\"Unknown action: {}\", action))) },\n        }\n    }\n}\n");
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let promotions_dir = std::path::PathBuf::from(home).join(".soma").join("promotions");
+    if let Err(e) = std::fs::create_dir_all(&promotions_dir) {
+        return CapabilityResult {
+            success: false,
+            data: Value::Null,
+            error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Could not create promotions dir: {}", e))),
+        };
+    }
+
+    let out_path = promotions_dir.join(format!("{}.rs", name));
+    match std::fs::write(&out_path, &stub) {
+        Ok(_) => CapabilityResult {
+            success: true,
+            data: serde_json::json!({
+                "path": out_path.to_string_lossy(),
+                "instructions": format!("Copy {} to soma-agent/src/capabilities/{}.rs, implement execute() arms, register in mod.rs, and rebuild.", out_path.display(), name),
+            }),
+            error: None,
+        },
+        Err(e) => CapabilityResult {
+            success: false,
+            data: Value::Null,
+            error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Failed to write stub: {}", e))),
+        },
+    }
+}
+
+fn to_pascal_case(s: &str) -> String {
+    s.split('_').map(|part| {
+        let mut chars = part.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+        }
+    }).collect()
 }
 
 /// Append a capability gap description to ~/.soma/gaps.log.

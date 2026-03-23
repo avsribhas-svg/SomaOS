@@ -74,6 +74,13 @@ impl Dock {
                     is_active: false,
                 },
                 DockApp {
+                    name: "Media".into(),
+                    icon_label: "Md".into(),
+                    action: DockAction::OpenWindow(WindowContentType::Media),
+                    is_open: false,
+                    is_active: false,
+                },
+                DockApp {
                     name: "Settings".into(),
                     icon_label: "⚙".into(),
                     action: DockAction::OpenWindow(WindowContentType::Settings),
@@ -138,6 +145,7 @@ impl Dock {
         has_browser: bool,
         has_sheets: bool,
         has_docs: bool,
+        has_media: bool,
         has_settings: bool,
         agent_mode: bool,
         sidebar_visible: bool,
@@ -159,6 +167,10 @@ impl Dock {
                 }
                 DockAction::OpenWindow(WindowContentType::Docs) => {
                     app.is_open = has_docs;
+                    app.is_active = false;
+                }
+                DockAction::OpenWindow(WindowContentType::Media) => {
+                    app.is_open = has_media;
                     app.is_active = false;
                 }
                 DockAction::OpenWindow(WindowContentType::Settings) => {

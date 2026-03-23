@@ -75,8 +75,9 @@ pub fn update(
     let has_browser  = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Browser));
     let has_sheets   = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Sheets));
     let has_docs     = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Docs));
+    let has_media    = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Media));
     let has_settings = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Settings));
-    dock.sync_open_state(has_terminal, has_browser, has_sheets, has_docs, has_settings, agent_mode, sidebar_visible, private_mode);
+    dock.sync_open_state(has_terminal, has_browser, has_sheets, has_docs, has_media, has_settings, agent_mode, sidebar_visible, private_mode);
     dock.hovered_idx = dock.hit_test(mouse_x, mouse_y, w, h);
 
     // Init / drive sidebar slide

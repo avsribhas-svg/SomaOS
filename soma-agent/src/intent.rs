@@ -255,6 +255,7 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
     if (s.contains("write") || s.contains("save"))
         && (s.contains(" to /") || s.contains(" to ~/") || s.contains(" to ./"))
         && !s.contains("document") && !s.contains("spreadsheet")
+        && !s.contains("image") && !s.contains("media") && !s.contains("generated")
     {
         let path = extract_path_token(input).unwrap_or_else(|| "/tmp/soma-output.txt".to_string());
         let content = extract_quoted_any(input).unwrap_or_else(|| "".to_string());
@@ -808,6 +809,124 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 risk_level: soma_common::RiskLevel::Low,
             });
         }
+    }
+
+    // desktop_agent.get_session_status — "show session status" or "what is the current agent session"
+    // Note: must be BEFORE any existing session-related patterns
+    if (s.contains("session") && (s.contains("status") || s.contains("show") || s.contains("current") || s.contains("what")))
+        || (s.contains("agent") && s.contains("session"))
+    {
+        return Some(soma_common::TaskPlan {
+            intent: "session_status".to_string(),
+            description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "desktop_agent".to_string(),
+                action: "get_session_status".to_string(),
+                params: serde_json::Value::Object(Default::default()),
+                description: "session_status".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
+    }
+
+    // meta.list_governance — "list all capabilities" / "show capability registry" / "what can you do"
+    if (s.contains("list") || s.contains("show"))
+        && (s.contains("capabilities") || s.contains("capability registry") || s.contains("governance"))
+    {
+        return Some(soma_common::TaskPlan {
+            intent: "list_governance".to_string(),
+            description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "meta".to_string(),
+                action: "list_governance".to_string(),
+                params: serde_json::Value::Object(Default::default()),
+                description: "list_governance".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
+    }
+
+    // meta.promote — "promote <name> to built-in" or "promote the X capability"
+    if s.contains("promote") && (s.contains("built-in") || s.contains("capability") || s.contains("builtin")) {
+        let name = extract_quoted_any(input)
+            .or_else(|| {
+                let pos = s.find("promote ")?;
+                let after = input[pos + "promote ".len()..].trim();
+                let word = after.split_whitespace().find(|w| !["the", "a", "an", "capability", "to", "built-in", "builtin"].contains(w))?;
+                Some(word.trim_matches(|c: char| c == '\'' || c == '"' || c == ',').to_string())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        return Some(soma_common::TaskPlan {
+            intent: "promote_capability".to_string(),
+            description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "meta".to_string(),
+                action: "promote".to_string(),
+                params: serde_json::json!({ "name": name }),
+                description: "promote_capability".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
+    }
+
+    // media.describe — "describe the media window" or "what is in the media window"
+    // Note: must be BEFORE media.generate to avoid "describe" matching generate
+    if (s.contains("describe") || s.contains("what") || s.contains("show")) && s.contains("media") {
+        return Some(soma_common::TaskPlan {
+            intent: "media_describe".to_string(),
+            description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "media".to_string(),
+                action: "describe".to_string(),
+                params: serde_json::json!({ "window_id": 0 }),
+                description: "media_describe".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
+    }
+
+    // media.generate — "generate an image of X" or "create image X"
+    if (s.contains("generate") || s.contains("create"))
+        && (s.contains("image") || s.contains("picture") || s.contains("photo") || s.contains("illustration"))
+        && !s.contains("save") && !s.contains("export")
+    {
+        let prompt = extract_quoted_any(input).unwrap_or_else(|| {
+            for kw in &["image of ", "picture of ", "photo of ", "image showing ", "illustration of "] {
+                if let Some(pos) = s.find(kw) {
+                    return input[pos + kw.len()..].trim().to_string();
+                }
+            }
+            input.to_string()
+        });
+        return Some(soma_common::TaskPlan {
+            intent: "media_generate".to_string(),
+            description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "media".to_string(),
+                action: "generate".to_string(),
+                params: serde_json::json!({ "prompt": prompt, "window_id": 0 }),
+                description: "media_generate".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
+    }
+
+    // media.save — "save the generated image to <path>" or "save media to <path>"
+    if (s.contains("save") || s.contains("export"))
+        && (s.contains("image") || s.contains("media") || s.contains("generated"))
+    {
+        let path = extract_path_token(input).unwrap_or_else(|| "/tmp/soma-image.png".to_string());
+        return Some(soma_common::TaskPlan {
+            intent: "media_save".to_string(),
+            description: input.to_string(),
+            steps: vec![soma_common::TaskStep {
+                capability: "media".to_string(),
+                action: "save".to_string(),
+                params: serde_json::json!({ "path": path, "window_id": 0 }),
+                description: "media_save".to_string(),
+            }],
+            risk_level: soma_common::RiskLevel::Low,
+        });
     }
 
     None // fall through to LLM

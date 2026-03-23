@@ -481,8 +481,82 @@
   },
   {
     "id": "caps_parse",
-    "prompt": "what can you do",
+    "prompt": "list all your capabilities",
+    "expect_capability": "meta",
+    "expect_action": "list_governance",
     "auto_approve": false,
-    "timeout_secs": 60
+    "timeout_secs": 10
+  },
+  {
+    "id": "capability_governance_list",
+    "prompt": "list all capabilities and their types",
+    "expect_capability": "meta",
+    "expect_action": "list_governance",
+    "auto_approve": false,
+    "timeout_secs": 10
+  },
+  {
+    "id": "capability_promote_intent",
+    "prompt": "promote the my-scraper capability to a built-in",
+    "expect_capability": "meta",
+    "expect_action": "promote",
+    "auto_approve": false,
+    "timeout_secs": 10
+  },
+  {
+    "id": "session_start_scoped",
+    "prompt": "start agent mode for organizing files limited to filesystem and sheets capabilities",
+    "expect_capability": "desktop_agent",
+    "expect_action": "start_agent_mode",
+    "auto_approve": false,
+    "timeout_secs": 10
+  },
+  {
+    "id": "session_status_intent",
+    "prompt": "show current agent session status",
+    "expect_capability": "desktop_agent",
+    "expect_action": "get_session_status",
+    "auto_approve": false,
+    "timeout_secs": 10
+  },
+  {
+    "id": "media_generate_intent",
+    "prompt": "generate an image of a mountain at sunset",
+    "expect_capability": "media",
+    "expect_action": "generate",
+    "auto_approve": false,
+    "timeout_secs": 10
+  },
+  {
+    "id": "media_describe_intent",
+    "prompt": "describe the current media window",
+    "expect_capability": "media",
+    "expect_action": "describe",
+    "auto_approve": false,
+    "timeout_secs": 10
+  },
+  {
+    "id": "media_save_intent",
+    "prompt": "save the generated image to /tmp/soma-image.png",
+    "expect_capability": "media",
+    "expect_action": "save",
+    "auto_approve": false,
+    "timeout_secs": 10
+  },
+  {
+    "id": "semantic_sqlite_tag",
+    "prompt": "tag /tmp/test-notes.txt as important with description 'project notes'",
+    "expect_capability": "semantic_fs",
+    "expect_action": "tag",
+    "auto_approve": false,
+    "timeout_secs": 10
+  },
+  {
+    "id": "semantic_sqlite_find",
+    "prompt": "find files tagged as important",
+    "expect_capability": "semantic_fs",
+    "expect_action": "find_by_intent",
+    "auto_approve": false,
+    "timeout_secs": 10
   }
 ]

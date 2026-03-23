@@ -145,6 +145,7 @@ pub enum WindowContentType {
     Settings,
     Sheets,
     Docs,
+    Media,
 }
 
 impl WindowContent {
@@ -193,8 +194,9 @@ impl FloatingWindow {
             WindowContent::DynamicApp(d) => (d.app_id.clone(),             480.0, 360.0),
             WindowContent::Settings(_)   => ("System Settings".to_string(), 380.0, 420.0),
             WindowContent::NativeApp(ref app) => match app.content_type_id() {
-                WindowContentType::Docs => ("Untitled Document".to_string(), 720.0, 520.0),
-                _                       => ("Soma Sheets".to_string(),       960.0, 560.0),
+                WindowContentType::Docs  => ("Untitled Document".to_string(), 720.0, 520.0),
+                WindowContentType::Media => ("Soma Media".to_string(),        800.0, 580.0),
+                _                        => ("Soma Sheets".to_string(),       960.0, 560.0),
             },
         };
         let agent_owned = matches!(content, WindowContent::DynamicApp(_));

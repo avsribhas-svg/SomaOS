@@ -1,5 +1,5 @@
 use base64::Engine as _;
-use soma_common::{AgentMessage, AgentStatus, CapabilityInfo, CapabilityResult, CompositorMessage, TaskPlan, RiskLevel};
+use soma_common::{AgentMessage, AgentStatus, CapabilityInfo, CapabilityResult, CompositorMessage, SessionScope, TaskPlan, RiskLevel};
 use crate::renderer::Renderer;
 use tiny_skia::Pixmap;
 
@@ -122,6 +122,9 @@ pub struct Sidebar {
     pub capabilities: Vec<CapabilityInfo>,
     /// Scroll offset for the Registry tab
     pub registry_scroll: f32,
+    /// Active session card (task + scope) shown at top of Chat tab
+    pub active_session_task: Option<String>,
+    pub active_session_scope: Option<SessionScope>,
 }
 
 impl Sidebar {
@@ -143,6 +146,8 @@ impl Sidebar {
             slide_target_x: f32::MAX,
             capabilities: Vec::new(),
             registry_scroll: 0.0,
+            active_session_task: None,
+            active_session_scope: None,
         }
     }
 
@@ -247,6 +252,14 @@ impl Sidebar {
 
     fn handle_agent_message_inner(&mut self, msg: AgentMessage) {
         match msg {
+            AgentMessage::AgentModeStarted { task, scope } => {
+                self.active_session_task = Some(task);
+                self.active_session_scope = scope;
+            }
+            AgentMessage::AgentModeEnded => {
+                self.active_session_task = None;
+                self.active_session_scope = None;
+            }
             AgentMessage::TaskPlanReady { id, plan } => {
                 self.messages.retain(|m| !matches!(m, ChatMessage::Thinking));
                 self.current_step_total = plan.steps.len();
@@ -386,12 +399,20 @@ impl Sidebar {
             }
         }
 
-        // Save button at 247 + 3×58 = 421, height 32
+        // Save button at 247 + 3×58 = 421, height 28
         let save_y = fields_start_y + 3.0 * field_stride;
-        if rel_y >= save_y && rel_y < save_y + 36.0 && rel_x >= 14.0 {
+        if rel_y >= save_y && rel_y < save_y + 32.0 && rel_x >= 14.0 {
             self.settings.active_field = SettingsField::None;
             self.settings.saved_toast = 2.5;
             return Some(self.build_update_config());
+        }
+
+        // Reload Capabilities button (below save button + separator + label)
+        // save_y + 32 (btn) + 4 (gap) + 1 (separator) + 8 (gap) + 16 (label) + 20 (count)
+        let reload_btn_y = save_y + 81.0;
+        if rel_y >= reload_btn_y && rel_y < reload_btn_y + 26.0 && rel_x >= 14.0 {
+            self.settings.active_field = SettingsField::None;
+            return Some(CompositorMessage::ReloadCapabilities);
         }
 
         // Clicking elsewhere deselects text field focus
@@ -635,7 +656,31 @@ impl Sidebar {
         // Saved confirmation — inline, not a toast
         if s.saved_toast > 0.0 {
             renderer.draw_text(pixmap, "v  Settings applied", ox + 14.0, y, w - 28.0, 9.5, t.success);
+            y += 16.0;
         }
+
+        // Script Capabilities section
+        y += 4.0;
+        renderer.fill_rect(pixmap, ox + 14.0, y, w - 28.0, 1.0, t.border);
+        y += 8.0;
+        // Count script caps from ~/.soma/capabilities/
+        let script_count = {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+            let dir = std::path::PathBuf::from(home).join(".soma").join("capabilities");
+            std::fs::read_dir(&dir)
+                .map(|entries| entries.flatten().filter(|e| {
+                    e.path().extension().map(|x| x == "json").unwrap_or(false)
+                }).count())
+                .unwrap_or(0)
+        };
+        renderer.draw_text(pixmap, "SCRIPT CAPABILITIES", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
+        y += 16.0;
+        let cap_label = format!("{} user-defined capabilities loaded", script_count);
+        renderer.draw_text(pixmap, &cap_label, ox + 14.0, y, w - 28.0, 9.5, t.text_secondary);
+        y += 20.0;
+        // Reload button
+        renderer.fill_rect(pixmap, ox + 14.0, y, w - 28.0, 26.0, [40, 80, 60, 255]);
+        renderer.draw_text(pixmap, "Reload Capabilities", ox + w / 2.0 - 50.0, y + 7.0, 120.0, 9.5, [180, 230, 200, 255]);
 
         // Bottom hint
         let hint_y = height - 20.0;
@@ -852,7 +897,28 @@ impl Sidebar {
             return;
         }
 
-        let content_h = (top_y + height) - content_y - 68.0;
+        // Active Session card (shown at top of Chat tab when agent mode is active)
+        let mut session_card_h = 0.0_f32;
+        if let Some(ref task) = self.active_session_task.clone() {
+            let card_h = if self.active_session_scope.is_some() { 52.0 } else { 36.0 };
+            session_card_h = card_h + 4.0;
+            renderer.fill_rect(pixmap, ox + 8.0, content_y + 4.0, w - 16.0, card_h, [20, 60, 40, 200]);
+            renderer.fill_rect(pixmap, ox + 8.0, content_y + 4.0, 2.0, card_h, [80, 200, 120, 255]);
+            renderer.draw_text(pixmap, "Active Session", ox + 16.0, content_y + 8.0, w - 32.0, 8.5, [80, 200, 120, 255]);
+            renderer.draw_text(pixmap, task, ox + 16.0, content_y + 20.0, w - 32.0, 9.5, [200, 240, 210, 255]);
+            if let Some(ref scope) = self.active_session_scope {
+                let scope_text = {
+                    let caps = scope.capability_whitelist.as_ref()
+                        .map(|v| v.join(", "))
+                        .unwrap_or_else(|| "all".to_string());
+                    format!("Scope: {}", caps)
+                };
+                renderer.draw_text(pixmap, &scope_text, ox + 16.0, content_y + 36.0, w - 32.0, 8.5, [120, 180, 140, 255]);
+            }
+        }
+
+        let content_h = (top_y + height) - content_y - 68.0 - session_card_h;
+        let content_y = content_y + session_card_h;
 
         if self.messages.is_empty() {
             let cy = content_y + content_h / 2.0 - 40.0;

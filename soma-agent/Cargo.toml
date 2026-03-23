@@ -17,3 +17,4 @@ base64 = "0.22"
 scraper = { version = "0.20", default-features = false }
 toml = "0.8"
 async-trait = "0.1"
+rusqlite = { version = "0.31", features = ["bundled"] }

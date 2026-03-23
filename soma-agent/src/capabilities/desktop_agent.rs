@@ -21,8 +21,11 @@ impl Capability for DesktopAgentCapability {
         vec![
             ActionSchema {
                 name: "start_agent_mode".into(),
-                description: "Start desktop agent mode with a task description".into(),
-                params: vec![param("task", "string", true, "Description of the agent task")],
+                description: "Start desktop agent mode with a task description and optional scope".into(),
+                params: vec![
+                    param("task", "string", true, "Description of the agent task"),
+                    param("scope", "object", false, "Optional scope: {capabilities: [string], paths: [string]}"),
+                ],
             },
             ActionSchema {
                 name: "end_agent_mode".into(),
@@ -54,6 +57,11 @@ impl Capability for DesktopAgentCapability {
                 description: "Update the menu bar activity text".into(),
                 params: vec![param("text", "string", true, "Activity status text")],
             },
+            ActionSchema {
+                name: "get_session_status".into(),
+                description: "Get the current agent session status (id, task, steps, scope, affected resources)".into(),
+                params: vec![],
+            },
         ]
     }
 
@@ -67,12 +75,33 @@ impl Capability for DesktopAgentCapability {
         match action {
             "start_agent_mode" => {
                 let task = params["task"].as_str().unwrap_or("agent task").to_string();
+                // Optional scope: { capabilities: [...], paths: [...] }
+                let scope_val = params.get("scope").cloned().unwrap_or(json!(null));
+                // Build a SessionScope-compatible object if scope is present
+                let scope_obj = if scope_val.is_object() {
+                    let caps = scope_val.get("capabilities").cloned();
+                    let paths = scope_val.get("paths").cloned();
+                    json!({
+                        "capability_whitelist": caps,
+                        "path_whitelist": paths,
+                    })
+                } else {
+                    json!(null)
+                };
                 CapabilityResult {
                     success: true,
                     data: json!({
                         "ipc_message": "AgentModeStarted",
                         "task": task,
+                        "scope": scope_obj,
                     }),
+                    error: None,
+                }
+            }
+            "get_session_status" => {
+                CapabilityResult {
+                    success: true,
+                    data: json!({ "ipc_message": "GetSessionStatus" }),
                     error: None,
                 }
             }
