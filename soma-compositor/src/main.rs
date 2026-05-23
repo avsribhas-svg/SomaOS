@@ -7,6 +7,7 @@ mod dock;
 mod docs;
 mod event_handler;
 mod input;
+mod installer_wizard;
 mod ipc_client;
 mod login;
 mod media;
@@ -524,8 +525,15 @@ impl ApplicationHandler for SomaApp {
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    let installer_mode = std::env::args().any(|a| a == "--installer")
+        || std::env::var("SOMA_MODE").as_deref() == Ok("installer");
+
     info!("╔══════════════════════════════════════╗");
-    info!("║    SomaOS Compositor v1.0.1          ║");
+    if installer_mode {
+        info!("║  SomaOS Installer v2.0 — First Boot ║");
+    } else {
+        info!("║    SomaOS Compositor v1.0.1          ║");
+    }
     info!("╚══════════════════════════════════════╝");
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -535,16 +543,62 @@ fn main() {
 
     #[cfg(feature = "drm-backend")]
     {
-        info!("Backend: DRM/KMS (bare metal)");
-        drm_main(runtime.handle().clone());
+        if installer_mode {
+            info!("Backend: DRM/KMS (installer)");
+            installer_main(runtime.handle().clone());
+        } else {
+            info!("Backend: DRM/KMS (bare metal)");
+            drm_main(runtime.handle().clone());
+        }
     }
 
     #[cfg(feature = "winit-backend")]
     {
+        if installer_mode {
+            info!("Installer mode requires drm-backend; starting normal compositor instead.");
+        }
         info!("Backend: winit (dev)");
         let event_loop = EventLoop::new().expect("Failed to create event loop");
         let mut app = SomaApp::new(runtime.handle().clone());
         event_loop.run_app(&mut app).expect("Event loop failed");
+    }
+}
+
+/// First-boot installer wizard — DRM-only.
+/// Runs a full-screen setup flow: username/password → LLM API key → network.
+/// On completion writes /etc/soma/passwd and ~/.soma/config.toml, then reboots.
+#[cfg(feature = "drm-backend")]
+fn installer_main(_runtime: tokio::runtime::Handle) {
+    use backend::drm::DrmDisplay;
+    use input::EvdevInput;
+
+    let mut drm = DrmDisplay::new().expect("DRM init failed");
+    let mut evdev = EvdevInput::new();
+    let mut renderer = Renderer::new();
+
+    info!("Installer: entering first-boot wizard");
+
+    let mut wizard = installer_wizard::InstallerWizard::new();
+
+    loop {
+        let (w, h) = drm.size();
+        let mut pixmap = drm.pixmap(w, h);
+
+        wizard.render(&mut renderer, &mut pixmap, w, h);
+        drm.present(&pixmap);
+
+        let events = evdev.poll();
+        if wizard.handle_input(&events) {
+            if let Err(e) = wizard.commit() {
+                log::error!("Installer commit failed: {}", e);
+            } else {
+                info!("Installation complete — rebooting...");
+                let _ = std::process::Command::new("reboot").status();
+            }
+            break;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(16));
     }
 }
 

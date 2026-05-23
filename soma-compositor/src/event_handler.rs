@@ -417,7 +417,7 @@ pub fn poll_agent_messages(
                 *agent_mode = true;
                 *activity_text = task.clone();
             }
-            soma_common::AgentMessage::AgentModeEnded => {
+            soma_common::AgentMessage::AgentModeEnded { .. } => {
                 *agent_mode = false;
                 activity_text.clear();
             }
@@ -431,6 +431,14 @@ pub fn poll_agent_messages(
             soma_common::AgentMessage::ActivityUpdate { text } => {
                 *activity_text = text.clone();
             }
+            soma_common::AgentMessage::LayoutProposal { layout } => {
+                // Apply layout: reposition open windows according to the spec.
+                // Percentage-based positions in "windows" use {role, x_pct, y_pct, w_pct, h_pct}.
+                // The compositor screen size isn't available here, so we apply best-effort
+                // preset-based repositioning using hard-coded reference dimensions (1280×800).
+                apply_layout_preset(windows, toasts, layout);
+            }
+            soma_common::AgentMessage::UpdateAvailable { .. } => {} // handled by sidebar
             soma_common::AgentMessage::AppAction { window_id, action, params } => {
                 let (wid, act, prm) = (*window_id, action.clone(), params.clone());
 
@@ -540,6 +548,160 @@ fn spawn_dynamic_app(
     for w in windows.iter_mut() { w.is_focused = false; }
     win.is_focused = true;
     windows.push(win);
+}
+
+/// Reposition open windows according to a `LayoutSpec`.
+///
+/// Explicit `layout.windows` entries (by `window_id`) take priority.
+/// Otherwise `layout.preset` drives a heuristic arrangement.
+/// Reference screen: 1280 × 800 px (menu bar 28 px top, dock 72 px bottom).
+pub fn apply_layout_preset(
+    windows: &mut Vec<FloatingWindow>,
+    toasts: &mut Vec<Toast>,
+    layout: &soma_common::LayoutSpec,
+) {
+    const REF_W: f32 = 1280.0;
+    const REF_H: f32 = 800.0;
+    const TOP: f32 = 28.0;    // MENU_BAR_H
+    const BOTTOM: f32 = 72.0; // DOCK_HEIGHT
+    const USABLE_H: f32 = REF_H - TOP - BOTTOM;
+    const PAD: f32 = 8.0;
+
+    // 1. Explicit per-window geometry (agent supplied exact coords)
+    if !layout.windows.is_empty() {
+        for spec in &layout.windows {
+            if let Some(win) = windows.iter_mut().find(|w| w.id == spec.window_id) {
+                win.x = spec.x;
+                win.y = spec.y;
+                win.width = spec.width;
+                win.height = spec.height;
+            }
+        }
+        toasts.push(Toast::new(
+            format!("Layout applied: {}", layout.name),
+            [99, 102, 241, 255],
+        ));
+        return;
+    }
+
+    // 2. Preset-based heuristic placement
+    let preset = layout.preset.as_deref().unwrap_or(&layout.name);
+
+    // Collect (index, content_type) so we can assign positions without borrow issues
+    let indices: Vec<(usize, Option<WindowContentType>)> = windows
+        .iter()
+        .enumerate()
+        .map(|(i, w)| (i, w.content.content_type()))
+        .collect();
+
+    // Helper closures for common window types
+    let idx_of = |ct: WindowContentType| -> Option<usize> {
+        indices.iter().find(|(_, t)| *t == Some(ct)).map(|(i, _)| *i)
+    };
+
+    match preset {
+        // Terminal left half, browser right half
+        "split_left_right" | "coding_layout" => {
+            let half_w = (REF_W - PAD * 3.0) / 2.0;
+            let h = USABLE_H - PAD * 2.0;
+            let y = TOP + PAD;
+            if let Some(i) = idx_of(WindowContentType::Terminal) {
+                windows[i].x = PAD; windows[i].y = y;
+                windows[i].width = half_w; windows[i].height = h;
+            }
+            if let Some(i) = idx_of(WindowContentType::Browser) {
+                windows[i].x = PAD * 2.0 + half_w; windows[i].y = y;
+                windows[i].width = half_w; windows[i].height = h;
+            }
+        }
+
+        // Browser 2/3 left, docs 1/3 right
+        "research_layout" => {
+            let two_thirds = (REF_W - PAD * 3.0) * 2.0 / 3.0;
+            let one_third  = REF_W - PAD * 3.0 - two_thirds;
+            let h = USABLE_H - PAD * 2.0;
+            let y = TOP + PAD;
+            if let Some(i) = idx_of(WindowContentType::Browser) {
+                windows[i].x = PAD; windows[i].y = y;
+                windows[i].width = two_thirds; windows[i].height = h;
+            }
+            if let Some(i) = idx_of(WindowContentType::Docs) {
+                windows[i].x = PAD * 2.0 + two_thirds; windows[i].y = y;
+                windows[i].width = one_third; windows[i].height = h;
+            }
+        }
+
+        // Docs centred, fullscreen minus padding
+        "writing_layout" => {
+            if let Some(i) = idx_of(WindowContentType::Docs) {
+                windows[i].x = PAD * 4.0;
+                windows[i].y = TOP + PAD;
+                windows[i].width = REF_W - PAD * 8.0;
+                windows[i].height = USABLE_H - PAD * 2.0;
+            }
+        }
+
+        // Sheets left, terminal right
+        "data_layout" => {
+            let half_w = (REF_W - PAD * 3.0) / 2.0;
+            let h = USABLE_H - PAD * 2.0;
+            let y = TOP + PAD;
+            if let Some(i) = idx_of(WindowContentType::Sheets) {
+                windows[i].x = PAD; windows[i].y = y;
+                windows[i].width = half_w; windows[i].height = h;
+            }
+            if let Some(i) = idx_of(WindowContentType::Terminal) {
+                windows[i].x = PAD * 2.0 + half_w; windows[i].y = y;
+                windows[i].width = half_w; windows[i].height = h;
+            }
+        }
+
+        // All open windows tiled vertically in equal columns
+        "stacked" | "balanced_layout" => {
+            let n = windows.len().max(1) as f32;
+            let col_w = (REF_W - PAD * (n + 1.0)) / n;
+            let h = USABLE_H - PAD * 2.0;
+            for (col, win) in windows.iter_mut().enumerate() {
+                win.x = PAD + col as f32 * (col_w + PAD);
+                win.y = TOP + PAD;
+                win.width = col_w;
+                win.height = h;
+            }
+        }
+
+        // Single window focus: maximise the top (focused) window
+        "focus" => {
+            if let Some(win) = windows.iter_mut().rev().find(|w| w.is_focused) {
+                win.x = PAD;
+                win.y = TOP + PAD;
+                win.width = REF_W - PAD * 2.0;
+                win.height = USABLE_H - PAD * 2.0;
+            }
+        }
+
+        // Terminal fullscreen
+        "fullscreen_terminal" => {
+            if let Some(i) = idx_of(WindowContentType::Terminal) {
+                windows[i].x = 0.0;
+                windows[i].y = TOP;
+                windows[i].width = REF_W;
+                windows[i].height = USABLE_H;
+            }
+        }
+
+        _ => {
+            toasts.push(Toast::new(
+                format!("Unknown layout preset: {}", preset),
+                [248, 113, 113, 255],
+            ));
+            return;
+        }
+    }
+
+    toasts.push(Toast::new(
+        format!("Layout: {}", layout.name),
+        [99, 102, 241, 255],
+    ));
 }
 
 fn unix_secs() -> u64 {

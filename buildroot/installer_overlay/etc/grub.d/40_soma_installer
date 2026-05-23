@@ -1,0 +1,13 @@
+#!/bin/sh
+# GRUB menu entry for SomaOS installer
+cat << 'EOF'
+menuentry "Install SomaOS" {
+    linux /boot/bzImage console=tty0 root=/dev/ram0 quiet splash
+    initrd /boot/rootfs.cpio.gz
+}
+
+menuentry "Install SomaOS (debug)" {
+    linux /boot/bzImage console=ttyS0,115200 root=/dev/ram0
+    initrd /boot/rootfs.cpio.gz
+}
+EOF

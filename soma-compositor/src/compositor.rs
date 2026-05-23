@@ -78,6 +78,7 @@ pub fn update(
     let has_media    = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Media));
     let has_settings = windows.iter().any(|w| w.content.content_type() == Some(WindowContentType::Settings));
     dock.sync_open_state(has_terminal, has_browser, has_sheets, has_docs, has_media, has_settings, agent_mode, sidebar_visible, private_mode);
+    dock.session_count = sidebar.active_sessions.len();
     dock.hovered_idx = dock.hit_test(mouse_x, mouse_y, w, h);
 
     // Init / drive sidebar slide
@@ -153,8 +154,18 @@ pub fn render(
     }
 
     // Layer 4: Menu bar
-    let status = sidebar.status;
-    desktop::render_menu_bar(renderer, pixmap, w, &status, activity_text, private_mode, menubar_clock);
+    desktop::render_menu_bar(
+        renderer,
+        pixmap,
+        w,
+        &sidebar.status,
+        activity_text,
+        private_mode,
+        menubar_clock,
+        sidebar.current_tier,
+        sidebar.current_mode,
+        &sidebar.active_scaffolds,
+    );
 
     // Layer 5: Dock
     dock::render_dock(renderer, pixmap, dock, w, h);

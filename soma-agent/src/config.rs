@@ -84,9 +84,42 @@ impl Default for ModelConfig {
     }
 }
 
+/// A peer SomaOS node reachable over TCP.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerNode {
+    /// Human-readable name used in the `delegate` capability.
+    pub name: String,
+    /// TCP address of the peer agent daemon (e.g. "192.168.1.42:7878").
+    pub addr: String,
+    /// Raw bearer token sent to the peer for auth (peer must have its SHA-256 in accepted_tokens).
+    pub token: Option<String>,
+    /// Whether to use TLS when connecting to this peer.
+    #[serde(default)]
+    pub tls: bool,
+}
+
+/// Network/federation transport config.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NetworkConfig {
+    /// Optional TCP listen address (e.g. "0.0.0.0:7878"). Disabled if absent.
+    pub tcp_listen_addr: Option<String>,
+    /// Path to PEM certificate for TLS. Requires tls_key_path.
+    pub tls_cert_path: Option<String>,
+    /// Path to PEM private key for TLS.
+    pub tls_key_path: Option<String>,
+    /// SHA-256 hex digests of accepted bearer tokens (TCP connections only).
+    #[serde(default)]
+    pub accepted_tokens: Vec<String>,
+    /// Known peer nodes for federation / delegation.
+    #[serde(default)]
+    pub peers: Vec<PeerNode>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SomaConfig {
     pub model: ModelConfig,
+    #[serde(default)]
+    pub network: NetworkConfig,
 }
 
 impl SomaConfig {

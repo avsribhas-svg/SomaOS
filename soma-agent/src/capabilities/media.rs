@@ -56,12 +56,12 @@ impl Capability for MediaCapability {
             "describe" => {
                 let cache = self.state_cache.lock().unwrap();
                 match cache.get(&window_id) {
-                    Some(state) => CapabilityResult {
+                    Some(state) => CapabilityResult { state_delta: None,
                         success: true,
                         data: state.summary.clone(),
                         error: None,
                     },
-                    None => CapabilityResult {
+                    None => CapabilityResult { state_delta: None,
                         success: false,
                         data: json!({ "message": "No media window found. Open soma-media from the dock first." }),
                         error: Some(CapabilityError::new(
@@ -74,13 +74,13 @@ impl Capability for MediaCapability {
             "generate" => {
                 let prompt = match params.get("prompt").and_then(|v| v.as_str()) {
                     Some(p) if !p.is_empty() => p.to_string(),
-                    _ => return CapabilityResult {
+                    _ => return CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::MissingParam, "prompt is required")),
                     },
                 };
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AppAction",
@@ -94,13 +94,13 @@ impl Capability for MediaCapability {
             "save" => {
                 let path = match params.get("path").and_then(|v| v.as_str()) {
                     Some(p) if !p.is_empty() => p.to_string(),
-                    _ => return CapabilityResult {
+                    _ => return CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::MissingParam, "path is required")),
                     },
                 };
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AppAction",
@@ -111,7 +111,7 @@ impl Capability for MediaCapability {
                     error: None,
                 }
             }
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(

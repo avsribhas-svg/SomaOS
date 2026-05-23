@@ -59,7 +59,7 @@ impl Capability for SystemCapability {
             "memory_info" => self.memory_info(),
             "network_status" => self.network_status(),
             "kernel_info" => self.kernel_info(),
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown system action: {}", action))),
@@ -295,7 +295,7 @@ impl SystemCapability {
 }
 
 fn ok(data: Value) -> CapabilityResult {
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: true,
         data,
         error: None,
@@ -303,7 +303,7 @@ fn ok(data: Value) -> CapabilityResult {
 }
 
 fn err(msg: &str) -> CapabilityResult {
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: false,
         data: Value::Null,
         error: Some(CapabilityError::new(ErrorReason::InternalError, msg)),

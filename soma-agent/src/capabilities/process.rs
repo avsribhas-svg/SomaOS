@@ -74,7 +74,7 @@ impl Capability for ProcessCapability {
             "service_status" => self.service_status(params),
             "service_restart" => self.service_restart(params),
             "service_list" => self.service_list(),
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown process action: {}", action))),
@@ -228,7 +228,7 @@ impl ProcessCapability {
 }
 
 fn ok(data: Value) -> CapabilityResult {
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: true,
         data,
         error: None,
@@ -236,7 +236,7 @@ fn ok(data: Value) -> CapabilityResult {
 }
 
 fn err(msg: &str) -> CapabilityResult {
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: false,
         data: Value::Null,
         error: Some(CapabilityError::new(ErrorReason::InternalError, msg)),

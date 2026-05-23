@@ -231,6 +231,7 @@ impl NativeAppContent for DocsApp {
                     success: true,
                     data: json!({ "block_count": self.blocks.len() }),
                     error: None,
+                    state_delta: None,
                 }
             }
 
@@ -243,6 +244,7 @@ impl NativeAppContent for DocsApp {
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::InvalidParam,
                             format!("Block index {} out of range (len={})", idx, self.blocks.len()))),
+                        state_delta: None,
                     };
                 }
                 self.blocks[idx].set_text(text);
@@ -251,6 +253,7 @@ impl NativeAppContent for DocsApp {
                     success: true,
                     data: json!({ "index": idx }),
                     error: None,
+                    state_delta: None,
                 }
             }
 
@@ -262,6 +265,7 @@ impl NativeAppContent for DocsApp {
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::InvalidParam,
                             format!("Block index {} out of range (len={})", idx, self.blocks.len()))),
+                        state_delta: None,
                     };
                 }
                 self.blocks.remove(idx);
@@ -273,6 +277,7 @@ impl NativeAppContent for DocsApp {
                     success: true,
                     data: json!({ "block_count": self.blocks.len() }),
                     error: None,
+                    state_delta: None,
                 }
             }
 
@@ -290,6 +295,7 @@ impl NativeAppContent for DocsApp {
                     success: true,
                     data: json!({ "blocks": slice }),
                     error: None,
+                    state_delta: None,
                 }
             }
 
@@ -301,6 +307,7 @@ impl NativeAppContent for DocsApp {
                     success: true,
                     data: json!({ "title": self.title }),
                     error: None,
+                    state_delta: None,
                 }
             }
 
@@ -309,6 +316,7 @@ impl NativeAppContent for DocsApp {
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction,
                     format!("docs: unknown action '{}'. Known: append_block, write_block, delete_block, read_blocks, set_title", action))),
+                state_delta: None,
             },
         }
     }

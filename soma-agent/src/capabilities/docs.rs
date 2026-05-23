@@ -92,7 +92,7 @@ impl Capability for DocsCapability {
             "create" => {
                 let title = params["title"].as_str().unwrap_or("Untitled Document").to_string();
                 let blocks = params.get("blocks").cloned().unwrap_or(Value::Array(Vec::new()));
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AppAction",
@@ -111,7 +111,7 @@ impl Capability for DocsCapability {
             "describe" => {
                 let cache = self.state_cache.lock().unwrap();
                 match cache.get(&window_id) {
-                    Some(state) => CapabilityResult {
+                    Some(state) => CapabilityResult { state_delta: None,
                         success: true,
                         data: json!({
                             "summary": state.summary,
@@ -119,7 +119,7 @@ impl Capability for DocsCapability {
                         }),
                         error: None,
                     },
-                    None => CapabilityResult {
+                    None => CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::NotFound,
@@ -142,7 +142,7 @@ impl Capability for DocsCapability {
                 if let Some(lang) = params["lang"].as_str() {
                     block_params["lang"] = json!(lang);
                 }
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AppAction",
@@ -157,7 +157,7 @@ impl Capability for DocsCapability {
             "write_block" => {
                 let index = params["index"].as_u64().unwrap_or(0);
                 let text = params["text"].as_str().unwrap_or("").to_string();
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AppAction",
@@ -171,7 +171,7 @@ impl Capability for DocsCapability {
 
             "delete_block" => {
                 let index = params["index"].as_u64().unwrap_or(0);
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AppAction",
@@ -183,7 +183,7 @@ impl Capability for DocsCapability {
                 }
             }
 
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction,

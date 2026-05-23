@@ -63,7 +63,7 @@ impl Capability for NetworkCapability {
             "curl" => execute_curl(params),
             "ifconfig" => execute_ifconfig(),
             "port_check" => execute_port_check(params),
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown network action: {}", action))),
@@ -76,7 +76,7 @@ fn execute_ping(params: &Value) -> CapabilityResult {
     let host = match params.get("host").and_then(|v| v.as_str()) {
         Some(h) => h,
         None => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: host")),
@@ -104,7 +104,7 @@ fn execute_ping(params: &Value) -> CapabilityResult {
                 let lines: Vec<&str> = stdout.lines().collect();
                 let stats_line = lines.iter().rev().find(|l| l.contains("packets"));
 
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "host": host,
@@ -115,14 +115,14 @@ fn execute_ping(params: &Value) -> CapabilityResult {
                     error: None,
                 }
             } else {
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: false,
                     data: json!({"output": stderr}),
                     error: Some(CapabilityError::new(ErrorReason::NetworkError, format!("Ping failed: {}", stderr.lines().next().unwrap_or("")))),
                 }
             }
         }
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to run ping: {}", e))),
@@ -134,7 +134,7 @@ fn execute_dns_lookup(params: &Value) -> CapabilityResult {
     let hostname = match params.get("hostname").and_then(|v| v.as_str()) {
         Some(h) => h,
         None => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: hostname")),
@@ -157,7 +157,7 @@ fn execute_dns_lookup(params: &Value) -> CapabilityResult {
                     })
                     .collect();
 
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "hostname": hostname,
@@ -167,7 +167,7 @@ fn execute_dns_lookup(params: &Value) -> CapabilityResult {
                     error: None,
                 }
             } else {
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: false,
                     data: Value::Null,
                     error: Some(CapabilityError::new(ErrorReason::NetworkError, format!("DNS lookup failed for {}", hostname))),
@@ -179,7 +179,7 @@ fn execute_dns_lookup(params: &Value) -> CapabilityResult {
             match Command::new("nslookup").arg(hostname).output() {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                    CapabilityResult {
+                    CapabilityResult { state_delta: None,
                         success: out.status.success(),
                         data: json!({"hostname": hostname, "raw": stdout.trim()}),
                         error: if out.status.success() {
@@ -189,7 +189,7 @@ fn execute_dns_lookup(params: &Value) -> CapabilityResult {
                         },
                     }
                 }
-                Err(e) => CapabilityResult {
+                Err(e) => CapabilityResult { state_delta: None,
                     success: false,
                     data: Value::Null,
                     error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("No DNS tools available: {}", e))),
@@ -203,7 +203,7 @@ fn execute_curl(params: &Value) -> CapabilityResult {
     let url = match params.get("url").and_then(|v| v.as_str()) {
         Some(u) => u,
         None => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: url")),
@@ -237,7 +237,7 @@ fn execute_curl(params: &Value) -> CapabilityResult {
             let size = parts.get(2).unwrap_or(&"0");
             let content_type = parts.get(3).unwrap_or(&"unknown");
 
-            CapabilityResult {
+            CapabilityResult { state_delta: None,
                 success: out.status.success(),
                 data: json!({
                     "url": url,
@@ -250,7 +250,7 @@ fn execute_curl(params: &Value) -> CapabilityResult {
                 error: None,
             }
         }
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to run curl: {}", e))),
@@ -305,7 +305,7 @@ fn execute_ifconfig() -> CapabilityResult {
                 }));
             }
 
-            CapabilityResult {
+            CapabilityResult { state_delta: None,
                 success: true,
                 data: json!({
                     "count": interfaces.len(),
@@ -314,7 +314,7 @@ fn execute_ifconfig() -> CapabilityResult {
                 error: None,
             }
         }
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("No network tools available: {}", e))),
@@ -326,7 +326,7 @@ fn execute_port_check(params: &Value) -> CapabilityResult {
     let host = match params.get("host").and_then(|v| v.as_str()) {
         Some(h) => h,
         None => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: host")),
@@ -337,7 +337,7 @@ fn execute_port_check(params: &Value) -> CapabilityResult {
     let port = match params.get("port").and_then(|v| v.as_u64()) {
         Some(p) => p as u16,
         None => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: port")),
@@ -359,7 +359,7 @@ fn execute_port_check(params: &Value) -> CapabilityResult {
     )
     .is_ok();
 
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: true,
         data: json!({
             "host": host,

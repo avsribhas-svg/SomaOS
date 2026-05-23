@@ -39,6 +39,8 @@ pub struct DockApp {
 pub struct Dock {
     pub apps: Vec<DockApp>,
     pub hovered_idx: Option<usize>,
+    /// Number of active agent sessions — shown as a badge on the AI icon
+    pub session_count: usize,
 }
 
 impl Dock {
@@ -110,6 +112,7 @@ impl Dock {
                 },
             ],
             hovered_idx: None,
+            session_count: 0,
         }
     }
 
@@ -254,19 +257,29 @@ pub fn render_dock(
         // Open indicator dot (below pill)
         if app.is_open {
             let dot_color = if app.is_active { t.agent_active } else { t.accent };
-            
+
             // Subtle neon glow
             renderer.fill_rounded_rect(pixmap,
                 ix + DOCK_ITEM_W / 2.0 - 4.0,
                 py + ph - 5.5,
                 8.0, 8.0, 4.0,
                 [dot_color[0], dot_color[1], dot_color[2], 80]);
-                
+
             // Core bright dot
             renderer.fill_rounded_rect(pixmap,
                 ix + DOCK_ITEM_W / 2.0 - 2.0,
                 py + ph - 3.5,
                 4.0, 4.0, 2.0, dot_color);
+        }
+
+        // Session count badge on the AI icon
+        if matches!(app.action, DockAction::ToggleAgentMode) && dock.session_count > 0 {
+            let badge_x = ix + DOCK_ITEM_W - 16.0;
+            let badge_y = iy - 2.0;
+            renderer.fill_rounded_rect(pixmap, badge_x, badge_y, 14.0, 14.0, 7.0, [220, 60, 60, 255]);
+            let count_str = dock.session_count.to_string();
+            let cx = badge_x + (14.0 - count_str.len() as f32 * 6.0) / 2.0;
+            renderer.draw_text(pixmap, &count_str, cx, badge_y + 3.0, 14.0, 9.0, [255, 255, 255, 255]);
         }
     }
 }

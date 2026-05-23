@@ -82,7 +82,7 @@ impl Capability for PackageCapability {
         let pm = match detect_package_manager() {
             Some(pm) => pm,
             None => {
-                return CapabilityResult {
+                return CapabilityResult { state_delta: None,
                     success: false,
                     data: Value::Null,
                     error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, "No supported package manager found")),
@@ -95,7 +95,7 @@ impl Capability for PackageCapability {
             "search" => execute_search(pm, params),
             "install" => execute_install(pm, params),
             "remove" => execute_remove(pm, params),
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown package action: {}", action))),
@@ -117,7 +117,7 @@ fn execute_list(pm: &str, params: &Value) -> CapabilityResult {
         "dnf" | "yum" => Command::new(pm).args(["list", "installed"]).output(),
         "pacman" => Command::new("pacman").args(["-Q"]).output(),
         _ => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("Unsupported package manager: {}", pm))),
@@ -140,7 +140,7 @@ fn execute_list(pm: &str, params: &Value) -> CapabilityResult {
 
             packages.sort();
 
-            CapabilityResult {
+            CapabilityResult { state_delta: None,
                 success: true,
                 data: json!({
                     "package_manager": pm,
@@ -151,7 +151,7 @@ fn execute_list(pm: &str, params: &Value) -> CapabilityResult {
                 error: None,
             }
         }
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to list packages: {}", e))),
@@ -163,7 +163,7 @@ fn execute_search(pm: &str, params: &Value) -> CapabilityResult {
     let query = match params.get("query").and_then(|v| v.as_str()) {
         Some(q) => q,
         None => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: query")),
@@ -171,7 +171,7 @@ fn execute_search(pm: &str, params: &Value) -> CapabilityResult {
         }
     };
     if let Err(e) = validate_package_name(query) {
-        return CapabilityResult {
+        return CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InvalidParam, e)),
@@ -185,7 +185,7 @@ fn execute_search(pm: &str, params: &Value) -> CapabilityResult {
         "dnf" | "yum" => Command::new(pm).args(["search", query]).output(),
         "pacman" => Command::new("pacman").args(["-Ss", query]).output(),
         _ => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("Unsupported package manager: {}", pm))),
@@ -203,7 +203,7 @@ fn execute_search(pm: &str, params: &Value) -> CapabilityResult {
                 .map(|l| l.to_string())
                 .collect();
 
-            CapabilityResult {
+            CapabilityResult { state_delta: None,
                 success: true,
                 data: json!({
                     "package_manager": pm,
@@ -214,7 +214,7 @@ fn execute_search(pm: &str, params: &Value) -> CapabilityResult {
                 error: None,
             }
         }
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to search packages: {}", e))),
@@ -226,7 +226,7 @@ fn execute_install(pm: &str, params: &Value) -> CapabilityResult {
     let name = match params.get("name").and_then(|v| v.as_str()) {
         Some(n) => n,
         None => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: name")),
@@ -234,7 +234,7 @@ fn execute_install(pm: &str, params: &Value) -> CapabilityResult {
         }
     };
     if let Err(e) = validate_package_name(name) {
-        return CapabilityResult {
+        return CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InvalidParam, e)),
@@ -248,7 +248,7 @@ fn execute_install(pm: &str, params: &Value) -> CapabilityResult {
         "dnf" | "yum" => Command::new(pm).args(["install", "-y", name]).output(),
         "pacman" => Command::new("pacman").args(["-S", "--noconfirm", name]).output(),
         _ => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("Unsupported package manager: {}", pm))),
@@ -261,7 +261,7 @@ fn execute_install(pm: &str, params: &Value) -> CapabilityResult {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
 
-            CapabilityResult {
+            CapabilityResult { state_delta: None,
                 success: out.status.success(),
                 data: json!({
                     "package_manager": pm,
@@ -276,7 +276,7 @@ fn execute_install(pm: &str, params: &Value) -> CapabilityResult {
                 },
             }
         }
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to install package: {}", e))),
@@ -288,7 +288,7 @@ fn execute_remove(pm: &str, params: &Value) -> CapabilityResult {
     let name = match params.get("name").and_then(|v| v.as_str()) {
         Some(n) => n,
         None => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "Missing required param: name")),
@@ -296,7 +296,7 @@ fn execute_remove(pm: &str, params: &Value) -> CapabilityResult {
         }
     };
     if let Err(e) = validate_package_name(name) {
-        return CapabilityResult {
+        return CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InvalidParam, e)),
@@ -310,7 +310,7 @@ fn execute_remove(pm: &str, params: &Value) -> CapabilityResult {
         "dnf" | "yum" => Command::new(pm).args(["remove", "-y", name]).output(),
         "pacman" => Command::new("pacman").args(["-R", "--noconfirm", name]).output(),
         _ => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnsupportedPlatform, format!("Unsupported package manager: {}", pm))),
@@ -323,7 +323,7 @@ fn execute_remove(pm: &str, params: &Value) -> CapabilityResult {
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
 
-            CapabilityResult {
+            CapabilityResult { state_delta: None,
                 success: out.status.success(),
                 data: json!({
                     "package_manager": pm,
@@ -338,7 +338,7 @@ fn execute_remove(pm: &str, params: &Value) -> CapabilityResult {
                 },
             }
         }
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to remove package: {}", e))),

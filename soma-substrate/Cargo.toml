@@ -1,0 +1,13 @@
+[package]
+name = "soma-substrate"
+version = "0.1.0"
+edition = "2021"
+description = "SomaOS V2 Orientation-Aligned Redesign Substrate Library"
+
+[dependencies]
+soma-common = { path = "../soma-common" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+sysinfo = { version = "0.30" }
+log = "0.4"

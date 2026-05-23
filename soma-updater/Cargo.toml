@@ -1,0 +1,17 @@
+[package]
+name = "soma-updater"
+version = "0.1.0"
+edition = "2021"
+description = "SomaOS OTA update client — check, apply, rollback"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+sha2 = "0.10"
+toml = "0.8"
+log = "0.4"
+env_logger = "0.11"
+base64 = "0.22"

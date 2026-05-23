@@ -112,7 +112,7 @@ impl CapabilityRegistry {
     pub fn execute(&self, capability: &str, action: &str, params: &Value) -> CapabilityResult {
         match self.capabilities.get(capability) {
             Some(cap) => cap.execute(action, params),
-            None => CapabilityResult {
+            None => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownCapability, format!("Unknown capability: {}", capability))),

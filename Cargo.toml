@@ -2,9 +2,11 @@
 resolver = "2"
 members = [
     "soma-common",
+    "soma-substrate",
     "soma-agent",
     "soma-compositor",
     "soma-cli",
+    "soma-updater",
 ]
 
 [workspace.dependencies]

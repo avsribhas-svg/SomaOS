@@ -487,6 +487,7 @@ impl NativeAppContent for SheetsApp {
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::InvalidParam,
                             format!("Invalid range: {}", range_str))),
+                        state_delta: None,
                     },
                 };
                 let mut rows_data: Vec<Vec<Value>> = Vec::new();
@@ -501,6 +502,7 @@ impl NativeAppContent for SheetsApp {
                     success: true,
                     data: json!({ "range": range_str, "values": rows_data }),
                     error: None,
+                    state_delta: None,
                 }
             }
 
@@ -513,6 +515,7 @@ impl NativeAppContent for SheetsApp {
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::InvalidParam,
                             format!("Invalid cell reference: {}", cell_str))),
+                        state_delta: None,
                     },
                 };
                 let value = match &params["value"] {
@@ -527,6 +530,7 @@ impl NativeAppContent for SheetsApp {
                     success: true,
                     data: json!({ "cell": cell_str, "value": value, "state": self.build_app_state() }),
                     error: None,
+                    state_delta: None,
                 }
             }
 
@@ -540,6 +544,7 @@ impl NativeAppContent for SheetsApp {
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::InvalidParam,
                             format!("Invalid cell reference: {}", cell_str))),
+                        state_delta: None,
                     },
                 };
                 // Normalize: strip leading '=' if present
@@ -550,6 +555,7 @@ impl NativeAppContent for SheetsApp {
                     success: true,
                     data: json!({ "cell": cell_str, "formula": formula, "result": result, "state": self.build_app_state() }),
                     error: None,
+                    state_delta: None,
                 }
             }
 
@@ -561,6 +567,7 @@ impl NativeAppContent for SheetsApp {
                     .with_alt("read_range")
                     .with_alt("write_cell")
                     .with_alt("apply_formula")),
+                state_delta: None,
             },
         }
     }

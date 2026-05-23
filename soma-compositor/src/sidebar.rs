@@ -1,5 +1,5 @@
 use base64::Engine as _;
-use soma_common::{AgentMessage, AgentStatus, CapabilityInfo, CapabilityResult, CompositorMessage, SessionScope, TaskPlan, RiskLevel};
+use soma_common::{AgentMessage, AgentStatus, CapabilityInfo, CapabilityResult, CompositorMessage, SessionScope, SessionStatus, TaskPlan, RiskLevel};
 use crate::renderer::Renderer;
 use tiny_skia::Pixmap;
 
@@ -12,6 +12,8 @@ pub enum SidebarTab {
     Chat,
     Settings,
     Registry,
+    Sessions,
+    Development,
 }
 
 /// Which text field in the settings tab is focused for keyboard input
@@ -122,9 +124,19 @@ pub struct Sidebar {
     pub capabilities: Vec<CapabilityInfo>,
     /// Scroll offset for the Registry tab
     pub registry_scroll: f32,
-    /// Active session card (task + scope) shown at top of Chat tab
-    pub active_session_task: Option<String>,
-    pub active_session_scope: Option<SessionScope>,
+    /// All active agent sessions — used by Sessions tab and Chat tab session card
+    pub active_sessions: Vec<SessionStatus>,
+    /// Scroll offset for the Sessions tab
+    pub sessions_scroll: f32,
+    // V2 Substrate fields
+    pub current_mode: soma_common::SystemMode,
+    pub active_scaffolds: Vec<soma_common::Scaffold>,
+    pub maturity_score: f64,
+    pub consistency_trend: f64,
+    pub recent_consequences: Vec<soma_common::ConsequenceRecord>,
+    pub tier_history: Vec<soma_common::TierTransition>,
+    pub current_tier: soma_common::ActionTier,
+    pub dev_scroll: f32,
 }
 
 impl Sidebar {
@@ -146,8 +158,16 @@ impl Sidebar {
             slide_target_x: f32::MAX,
             capabilities: Vec::new(),
             registry_scroll: 0.0,
-            active_session_task: None,
-            active_session_scope: None,
+            active_sessions: Vec::new(),
+            sessions_scroll: 0.0,
+            current_mode: soma_common::SystemMode::Idle,
+            active_scaffolds: Vec::new(),
+            maturity_score: 0.0,
+            consistency_trend: 0.0,
+            recent_consequences: Vec::new(),
+            tier_history: Vec::new(),
+            current_tier: soma_common::ActionTier::Observe,
+            dev_scroll: 0.0,
         }
     }
 
@@ -186,10 +206,11 @@ impl Sidebar {
     }
 
     pub fn scroll(&mut self, delta: f32) {
-        if self.tab == SidebarTab::Registry {
-            self.registry_scroll = (self.registry_scroll - delta).max(0.0);
-        } else {
-            self.scroll_offset = (self.scroll_offset - delta).max(0.0);
+        match self.tab {
+            SidebarTab::Registry => self.registry_scroll = (self.registry_scroll - delta).max(0.0),
+            SidebarTab::Sessions => self.sessions_scroll = (self.sessions_scroll - delta).max(0.0),
+            SidebarTab::Development => self.dev_scroll = (self.dev_scroll - delta).max(0.0),
+            _ => self.scroll_offset = (self.scroll_offset - delta).max(0.0),
         }
     }
 
@@ -208,7 +229,7 @@ impl Sidebar {
                 self.input_text.clear();
                 self.status = AgentStatus::Thinking;
                 self.scroll_to_bottom();
-                Some(CompositorMessage::NaturalLanguageInput { text })
+                Some(CompositorMessage::NaturalLanguageInput { text, session_id: None })
             }
             AgentStatus::AwaitingApproval => self.on_approve(),
             _ => None,
@@ -221,7 +242,7 @@ impl Sidebar {
             if let Some(plan) = &self.current_plan {
                 self.current_step_total = plan.steps.len();
             }
-            Some(CompositorMessage::Approve { id })
+            Some(CompositorMessage::Approve { id, session_id: None })
         } else { None }
     }
 
@@ -230,7 +251,7 @@ impl Sidebar {
             self.current_plan = None;
             self.status = AgentStatus::Idle;
             self.messages.retain(|m| !matches!(m, ChatMessage::Thinking));
-            Some(CompositorMessage::Reject { id })
+            Some(CompositorMessage::Reject { id, session_id: None })
         } else { None }
     }
 
@@ -241,8 +262,27 @@ impl Sidebar {
                 return None;
             }
             AgentMessage::CapabilitiesReloaded { .. } => {
-                // Ask agent for the fresh list now
                 return Some(CompositorMessage::QueryCapabilities);
+            }
+            // Layout proposal goes through the HITL gate — show as approval prompt
+            AgentMessage::LayoutProposal { ref layout } => {
+                self.messages.push(ChatMessage::AgentError {
+                    message: format!(
+                        "Layout proposal: '{}' — {}\nApprove to apply. (type /apply_layout to confirm)",
+                        layout.name, layout.description
+                    ),
+                });
+                self.scroll_to_bottom();
+                // Fall through to store the layout in the pending plan if approved;
+                // for now surface it as a message and pass ApplyLayout back
+                return Some(CompositorMessage::ApplyLayout { layout: layout.clone() });
+            }
+            AgentMessage::UpdateAvailable { ref version, size_bytes } => {
+                self.messages.push(ChatMessage::AgentError {
+                    message: format!("Update available: v{} ({} KB). Type /approve_update to apply.", version, size_bytes / 1024),
+                });
+                self.scroll_to_bottom();
+                return None;
             }
             _ => {}
         }
@@ -252,15 +292,35 @@ impl Sidebar {
 
     fn handle_agent_message_inner(&mut self, msg: AgentMessage) {
         match msg {
-            AgentMessage::AgentModeStarted { task, scope } => {
-                self.active_session_task = Some(task);
-                self.active_session_scope = scope;
+            AgentMessage::AgentModeStarted { task, scope, session_id } => {
+                // If we get an explicit AgentModeStarted, push it as a new session status
+                let new_status = SessionStatus {
+                    session_id: session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                    task,
+                    started_at_unix: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs()).unwrap_or(0),
+                    step_count: 0,
+                    scope,
+                    affected_resources: Vec::new(),
+                };
+                self.active_sessions.retain(|s| s.session_id != new_status.session_id);
+                self.active_sessions.push(new_status);
             }
-            AgentMessage::AgentModeEnded => {
-                self.active_session_task = None;
-                self.active_session_scope = None;
+            AgentMessage::AgentModeEnded { session_id } => {
+                if let Some(sid) = session_id {
+                    self.active_sessions.retain(|s| s.session_id != sid);
+                } else {
+                    self.active_sessions.clear();
+                }
             }
-            AgentMessage::TaskPlanReady { id, plan } => {
+            AgentMessage::SessionList { sessions } => {
+                self.active_sessions = sessions;
+            }
+            AgentMessage::SessionInterrupted { session_id } => {
+                self.active_sessions.retain(|s| s.session_id != session_id);
+            }
+            AgentMessage::TaskPlanReady { id, plan, .. } => {
                 self.messages.retain(|m| !matches!(m, ChatMessage::Thinking));
                 self.current_step_total = plan.steps.len();
                 self.messages.push(ChatMessage::PlanProposal { _id: id.clone(), plan: plan.clone() });
@@ -269,8 +329,21 @@ impl Sidebar {
                 self.current_plan_id = Some(id);
                 self.scroll_to_bottom();
             }
-            AgentMessage::StepResult { .. } => {
-                // Skip per-step messages — we show everything at ExecutionComplete
+            AgentMessage::StepResult { result, .. } => {
+                if let Some(ref delta) = result.state_delta {
+                    let record = soma_common::ConsequenceRecord {
+                        action_capability: delta.action_capability.clone(),
+                        action_name: delta.action_name.clone(),
+                        immediate_delta: delta.clone(),
+                        short_term_delta: None,
+                        medium_term_delta: None,
+                        cascading_effects: Vec::new(),
+                    };
+                    self.recent_consequences.push(record);
+                    if self.recent_consequences.len() > 10 {
+                        self.recent_consequences.remove(0);
+                    }
+                }
             }
             AgentMessage::ExecutionComplete { results, .. } => {
                 let intent = self.current_plan.as_ref().map(|p| p.intent.clone()).unwrap_or_default();
@@ -294,6 +367,28 @@ impl Sidebar {
                 self.current_plan_id = None;
                 self.messages.push(ChatMessage::AgentError { message });
                 self.scroll_to_bottom();
+            }
+            AgentMessage::SystemModeChanged { mode } => {
+                self.current_mode = mode;
+            }
+            AgentMessage::TierTransitioned { transition } => {
+                self.current_tier = transition.to;
+                self.tier_history.push(transition);
+                if self.tier_history.len() > 20 {
+                    self.tier_history.remove(0);
+                }
+            }
+            AgentMessage::ScaffoldChanged { scaffold_type, state, activation_level } => {
+                self.active_scaffolds.retain(|s| s.scaffold_type != scaffold_type);
+                self.active_scaffolds.push(soma_common::Scaffold {
+                    scaffold_type,
+                    state,
+                    activation_level,
+                });
+            }
+            AgentMessage::BehavioralReport { maturity_score, consistency_trend } => {
+                self.maturity_score = maturity_score;
+                self.consistency_trend = consistency_trend;
             }
             _ => {}
         }
@@ -327,17 +422,26 @@ impl Sidebar {
     /// Returns an `UpdateConfig` message if the user clicked Save.
     pub fn on_settings_click(&mut self, rel_x: f32, rel_y: f32) -> Option<CompositorMessage> {
         // Tab bar: y=44..71 (44 tab_y + 26 tab_h + 1 separator)
-        // Three equal-width tabs: Chat | Settings | Registry
+        // Five equal-width tabs: Chat | Settings | Registry | Sessions | Dev
         if rel_y >= 44.0 && rel_y < 71.0 {
-            let third = SIDEBAR_WIDTH / 3.0;
-            if rel_x < third {
+            let step = SIDEBAR_WIDTH / 5.0;
+            if rel_x < step {
                 self.tab = SidebarTab::Chat;
-            } else if rel_x < third * 2.0 {
+            } else if rel_x < step * 2.0 {
                 self.tab = SidebarTab::Settings;
-            } else {
+            } else if rel_x < step * 3.0 {
                 self.tab = SidebarTab::Registry;
+            } else if rel_x < step * 4.0 {
+                self.tab = SidebarTab::Sessions;
+            } else {
+                self.tab = SidebarTab::Development;
             }
             return None;
+        }
+
+        // Sessions tab: interrupt button handling
+        if self.tab == SidebarTab::Sessions {
+            return self.on_sessions_click(rel_y);
         }
 
         // Registry tab button handling
@@ -455,6 +559,24 @@ impl Sidebar {
 
     fn on_registry_click(&mut self, _rel_y: f32) -> Option<CompositorMessage> {
         // Placeholder: callers that have height should use on_registry_click_with_height
+        None
+    }
+
+    fn on_sessions_click(&mut self, rel_y: f32) -> Option<CompositorMessage> {
+        // Each session card is 68px tall with 8px gap; content starts at y=71 (tab bar bottom)
+        let content_start = 71.0;
+        let card_stride = 76.0;
+        let ry = rel_y - content_start + self.sessions_scroll;
+        if ry < 0.0 { return None; }
+        let idx = (ry / card_stride) as usize;
+        if idx < self.active_sessions.len() {
+            // Interrupt button is in the bottom-right of each card (approx x > 300, y in last 20px)
+            let card_y_offset = ry - idx as f32 * card_stride;
+            if card_y_offset > 50.0 {
+                let session_id = self.active_sessions[idx].session_id.clone();
+                return Some(CompositorMessage::InterruptSession { session_id });
+            }
+        }
         None
     }
 
@@ -577,6 +699,190 @@ impl Sidebar {
     // ──────────────────────────────────────────────
     //  Settings tab rendering
     // ──────────────────────────────────────────────
+
+    fn render_sessions_tab(
+        &self,
+        renderer: &mut Renderer,
+        pixmap: &mut Pixmap,
+        ox: f32,
+        content_y: f32,
+        _height: f32,
+        t: &crate::renderer::Theme,
+    ) {
+        let w = SIDEBAR_WIDTH;
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs()).unwrap_or(0);
+
+        if self.active_sessions.is_empty() {
+            let cy = content_y + 60.0;
+            renderer.draw_text(pixmap, "No active sessions", ox + 14.0, cy, w - 28.0, 10.0, t.text_muted);
+            renderer.draw_text(pixmap, "Start an agent session to see it here.", ox + 14.0, cy + 18.0, w - 28.0, 9.0, t.text_muted);
+            return;
+        }
+
+        let mut y = content_y + 8.0 - self.sessions_scroll;
+        let card_h = 68.0;
+        let gap = 8.0;
+
+        for session in &self.active_sessions {
+            if y + card_h < content_y { y += card_h + gap; continue; }
+
+            // Card background
+            renderer.fill_rect(pixmap, ox + 8.0, y, w - 16.0, card_h, [20, 40, 60, 200]);
+            renderer.fill_rect(pixmap, ox + 8.0, y, 2.0, card_h, [80, 140, 220, 255]);
+
+            // Task name
+            renderer.draw_text(pixmap, &session.task, ox + 16.0, y + 8.0, w - 80.0, 9.5, [180, 210, 255, 255]);
+
+            // Step count and elapsed time
+            let elapsed_secs = now_unix.saturating_sub(session.started_at_unix);
+            let elapsed_str = if elapsed_secs < 60 {
+                format!("{}s", elapsed_secs)
+            } else {
+                format!("{}m {}s", elapsed_secs / 60, elapsed_secs % 60)
+            };
+            renderer.draw_text(pixmap, &format!("{} steps  •  {}", session.step_count, elapsed_str), ox + 16.0, y + 22.0, w - 80.0, 8.5, t.text_muted);
+
+            // Scope restrictions
+            if let Some(ref scope) = session.scope {
+                let caps = scope.capability_whitelist.as_ref()
+                    .map(|v| format!("caps: {}", v.join(", ")))
+                    .unwrap_or_default();
+                if !caps.is_empty() {
+                    renderer.draw_text(pixmap, &caps, ox + 16.0, y + 36.0, w - 80.0, 8.0, [120, 160, 120, 255]);
+                }
+            }
+
+            // Interrupt button
+            renderer.fill_rect(pixmap, ox + w - 74.0, y + 44.0, 62.0, 16.0, [160, 50, 50, 200]);
+            renderer.draw_text(pixmap, "Interrupt", ox + w - 70.0, y + 48.0, 60.0, 8.5, [255, 180, 180, 255]);
+
+            y += card_h + gap;
+        }
+    }
+
+    fn render_development_tab(
+        &self,
+        renderer: &mut Renderer,
+        pixmap: &mut Pixmap,
+        ox: f32,
+        content_y: f32,
+        height: f32,
+        t: &crate::renderer::Theme,
+    ) {
+        let w = SIDEBAR_WIDTH;
+        let mut y = content_y + 8.0 - self.dev_scroll;
+
+        // 1. Maturity and Consistency Section
+        renderer.draw_text(pixmap, "DEVELOPMENTAL MATURITY", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
+        y += 16.0;
+
+        // Maturity score bar
+        let bar_w = w - 28.0;
+        renderer.fill_rect(pixmap, ox + 14.0, y, bar_w, 14.0, [40, 40, 40, 255]);
+        let progress_w = bar_w * self.maturity_score as f32;
+        renderer.fill_rect(pixmap, ox + 14.0, y, progress_w, 14.0, t.success);
+        
+        let score_percentage = (self.maturity_score * 100.0) as u32;
+        renderer.draw_text(pixmap, &format!("Maturity: {}% (Trend: {:.3})", score_percentage, self.consistency_trend), ox + 14.0, y + 18.0, w - 28.0, 9.5, t.text_primary);
+        y += 38.0;
+
+        renderer.fill_rect(pixmap, ox + 14.0, y - 6.0, w - 28.0, 1.0, t.border);
+
+        // 2. Active Action Tier and Mode
+        renderer.draw_text(pixmap, "CURRENT STATES", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
+        y += 16.0;
+        
+        let dots_str = match self.current_tier {
+            soma_common::ActionTier::Observe => "● ○ ○ ○ ○ (Observe)",
+            soma_common::ActionTier::Touch => "● ● ○ ○ ○ (Touch)",
+            soma_common::ActionTier::Operate => "● ● ● ○ ○ (Operate)",
+            soma_common::ActionTier::Control => "● ● ● ● ○ (Control)",
+            soma_common::ActionTier::Autonomous => "● ● ● ● ● (Autonomous)",
+        };
+        renderer.draw_text(pixmap, &format!("Active Tier: {}", dots_str), ox + 14.0, y, w - 28.0, 9.5, t.text_primary);
+        y += 18.0;
+
+        renderer.draw_text(pixmap, &format!("System Mode: {} mode", self.current_mode), ox + 14.0, y, w - 28.0, 9.5, t.text_primary);
+        y += 24.0;
+
+        renderer.fill_rect(pixmap, ox + 14.0, y - 6.0, w - 28.0, 1.0, t.border);
+
+        // 3. Active Scaffolding
+        renderer.draw_text(pixmap, "SAFETY SCAFFOLDS", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
+        y += 16.0;
+        if self.active_scaffolds.is_empty() {
+            renderer.draw_text(pixmap, "No active scaffolds loaded.", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
+            y += 16.0;
+        } else {
+            for scaffold in &self.active_scaffolds {
+                let status_str = match scaffold.state {
+                    soma_common::ScaffoldState::Active => format!("Active ({:.1}%)", scaffold.activation_level * 100.0),
+                    soma_common::ScaffoldState::Latent => "Latent".to_string(),
+                    soma_common::ScaffoldState::Dissolved => "Dissolved".to_string(),
+                };
+                let color = match scaffold.state {
+                    soma_common::ScaffoldState::Active => t.warning,
+                    soma_common::ScaffoldState::Latent => t.success,
+                    soma_common::ScaffoldState::Dissolved => t.text_muted,
+                };
+                renderer.draw_text(pixmap, &format!("• {}: {}", scaffold.scaffold_type, status_str), ox + 14.0, y, w - 28.0, 9.0, color);
+                y += 15.0;
+            }
+        }
+        y += 8.0;
+
+        renderer.fill_rect(pixmap, ox + 14.0, y - 6.0, w - 28.0, 1.0, t.border);
+
+        // 4. Consequence History
+        renderer.draw_text(pixmap, "RECENT CONSEQUENCES", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
+        y += 16.0;
+        if self.recent_consequences.is_empty() {
+            renderer.draw_text(pixmap, "No consequence data yet.", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
+            y += 16.0;
+        } else {
+            for consequence in self.recent_consequences.iter().rev().take(3) {
+                let header = format!("{}.{}", consequence.action_capability, consequence.action_name);
+                renderer.draw_text(pixmap, &header, ox + 14.0, y, w - 28.0, 9.5, t.accent);
+                y += 14.0;
+                
+                let summary_wrapped = wrap_text(&consequence.immediate_delta.delta_summary, ((w - 28.0)/7.5) as usize);
+                for line in summary_wrapped {
+                    if y > height - 20.0 { break; }
+                    renderer.draw_text(pixmap, &format!("  {}", line), ox + 14.0, y, w - 28.0, 8.5, t.text_secondary);
+                    y += 13.0;
+                }
+                
+                if !consequence.cascading_effects.is_empty() {
+                    for effect in &consequence.cascading_effects {
+                        let color = if effect.expected { t.success } else { t.error };
+                        let label = format!("  Cascade: {:?} (mag: {:.2}, expected: {})", effect.affected_subsystem, effect.magnitude, effect.expected);
+                        renderer.draw_text(pixmap, &label, ox + 14.0, y, w - 28.0, 8.0, color);
+                        y += 13.0;
+                    }
+                }
+                y += 6.0;
+            }
+        }
+
+        y += 8.0;
+        renderer.fill_rect(pixmap, ox + 14.0, y - 6.0, w - 28.0, 1.0, t.border);
+
+        // 5. Tier Trajectory
+        renderer.draw_text(pixmap, "DEVELOPMENTAL TIER TRAJECTORY", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
+        y += 16.0;
+        if self.tier_history.is_empty() {
+            renderer.draw_text(pixmap, "No tier transitions recorded.", ox + 14.0, y, w - 28.0, 9.0, t.text_muted);
+            y += 16.0;
+        } else {
+            for trans in self.tier_history.iter().rev().take(3) {
+                let transition_label = format!("{:?} -> {:?} : {}", trans.from, trans.to, trans.reason);
+                renderer.draw_text(pixmap, &transition_label, ox + 14.0, y, w - 28.0, 8.5, t.text_secondary);
+                y += 14.0;
+            }
+        }
+    }
 
     fn render_settings_tab(
         &self,
@@ -850,37 +1156,31 @@ impl Sidebar {
         
         renderer.draw_text(pixmap, &status_text, ox + w - 86.0, top_y + 18.0, 78.0, 11.0, status_color);
 
-        // ─── Tab Bar — VS Code editor tab style (3 equal tabs) ───
+        // ─── Tab Bar — 5 equal tabs: Chat | Settings | Registry | Sessions | Dev ───
         let tab_y = top_y + 44.0;
         let tab_h = 26.0;
-        let third = w / 3.0;
+        let step = w / 5.0;
         renderer.fill_rect(pixmap, ox, tab_y, w, tab_h, [0, 0, 0, 20]);
 
-        // Chat tab
-        if self.tab == SidebarTab::Chat {
-            renderer.fill_rect(pixmap, ox, tab_y, third, tab_h, t.bg_sidebar);
-            renderer.fill_rect(pixmap, ox, tab_y, third, 1.0, t.accent);
-            renderer.draw_text(pixmap, "Chat", ox + third / 2.0 - 14.0, tab_y + 8.0, 60.0, 10.0, t.text_primary);
-        } else {
-            renderer.draw_text(pixmap, "Chat", ox + third / 2.0 - 14.0, tab_y + 8.0, 60.0, 10.0, t.text_muted);
-        }
-        renderer.fill_rect(pixmap, ox + third, tab_y + 6.0, 1.0, tab_h - 12.0, t.border);
-        // Settings tab
-        if self.tab == SidebarTab::Settings {
-            renderer.fill_rect(pixmap, ox + third, tab_y, third, tab_h, t.bg_sidebar);
-            renderer.fill_rect(pixmap, ox + third, tab_y, third, 1.0, t.accent);
-            renderer.draw_text(pixmap, "Settings", ox + third + third / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_primary);
-        } else {
-            renderer.draw_text(pixmap, "Settings", ox + third + third / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_muted);
-        }
-        renderer.fill_rect(pixmap, ox + third * 2.0, tab_y + 6.0, 1.0, tab_h - 12.0, t.border);
-        // Registry tab
-        if self.tab == SidebarTab::Registry {
-            renderer.fill_rect(pixmap, ox + third * 2.0, tab_y, third, tab_h, t.bg_sidebar);
-            renderer.fill_rect(pixmap, ox + third * 2.0, tab_y, third, 1.0, t.accent);
-            renderer.draw_text(pixmap, "Registry", ox + third * 2.0 + third / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_primary);
-        } else {
-            renderer.draw_text(pixmap, "Registry", ox + third * 2.0 + third / 2.0 - 22.0, tab_y + 8.0, 80.0, 10.0, t.text_muted);
+        let tab_labels = [
+            ("Chat",     SidebarTab::Chat),
+            ("Settings", SidebarTab::Settings),
+            ("Registry", SidebarTab::Registry),
+            ("Sessions", SidebarTab::Sessions),
+            ("Dev",      SidebarTab::Development),
+        ];
+        for (i, (label, variant)) in tab_labels.iter().enumerate() {
+            let tx = ox + i as f32 * step;
+            if self.tab == *variant {
+                renderer.fill_rect(pixmap, tx, tab_y, step, tab_h, t.bg_sidebar);
+                renderer.fill_rect(pixmap, tx, tab_y, step, 1.0, t.accent);
+                renderer.draw_text(pixmap, label, tx + step / 2.0 - label.len() as f32 * 3.0, tab_y + 8.0, step - 4.0, 10.0, t.text_primary);
+            } else {
+                renderer.draw_text(pixmap, label, tx + step / 2.0 - label.len() as f32 * 3.0, tab_y + 8.0, step - 4.0, 10.0, t.text_muted);
+            }
+            if i < 4 {
+                renderer.fill_rect(pixmap, tx + step, tab_y + 6.0, 1.0, tab_h - 12.0, t.border);
+            }
         }
         renderer.fill_rect(pixmap, ox, tab_y + tab_h, w, 1.0, t.border);
 
@@ -897,23 +1197,42 @@ impl Sidebar {
             return;
         }
 
-        // Active Session card (shown at top of Chat tab when agent mode is active)
+        if self.tab == SidebarTab::Sessions {
+            self.render_sessions_tab(renderer, pixmap, ox, content_y, top_y + height, &t);
+            return;
+        }
+
+        if self.tab == SidebarTab::Development {
+            self.render_development_tab(renderer, pixmap, ox, content_y, top_y + height, &t);
+            return;
+        }
+
+        // Active Session cards (shown at top of Chat tab when sessions are active)
         let mut session_card_h = 0.0_f32;
-        if let Some(ref task) = self.active_session_task.clone() {
-            let card_h = if self.active_session_scope.is_some() { 52.0 } else { 36.0 };
-            session_card_h = card_h + 4.0;
-            renderer.fill_rect(pixmap, ox + 8.0, content_y + 4.0, w - 16.0, card_h, [20, 60, 40, 200]);
-            renderer.fill_rect(pixmap, ox + 8.0, content_y + 4.0, 2.0, card_h, [80, 200, 120, 255]);
-            renderer.draw_text(pixmap, "Active Session", ox + 16.0, content_y + 8.0, w - 32.0, 8.5, [80, 200, 120, 255]);
-            renderer.draw_text(pixmap, task, ox + 16.0, content_y + 20.0, w - 32.0, 9.5, [200, 240, 210, 255]);
-            if let Some(ref scope) = self.active_session_scope {
-                let scope_text = {
-                    let caps = scope.capability_whitelist.as_ref()
-                        .map(|v| v.join(", "))
-                        .unwrap_or_else(|| "all".to_string());
-                    format!("Scope: {}", caps)
+        if !self.active_sessions.is_empty() {
+            let n = self.active_sessions.len().min(2); // show up to 2 inline, rest in Sessions tab
+            for (idx, session) in self.active_sessions.iter().take(n).enumerate() {
+                let has_scope = session.scope.as_ref().map(|s| s.capability_whitelist.is_some() || s.path_whitelist.is_some()).unwrap_or(false);
+                let card_h = if has_scope { 52.0 } else { 36.0 };
+                let cy = content_y + session_card_h + 4.0;
+                renderer.fill_rect(pixmap, ox + 8.0, cy, w - 16.0, card_h, [20, 60, 40, 200]);
+                renderer.fill_rect(pixmap, ox + 8.0, cy, 2.0, card_h, [80, 200, 120, 255]);
+                let label = if self.active_sessions.len() == 1 {
+                    "Active Session".to_string()
+                } else {
+                    format!("Session {}/{}", idx + 1, self.active_sessions.len())
                 };
-                renderer.draw_text(pixmap, &scope_text, ox + 16.0, content_y + 36.0, w - 32.0, 8.5, [120, 180, 140, 255]);
+                renderer.draw_text(pixmap, &label, ox + 16.0, cy + 8.0, w - 32.0, 8.5, [80, 200, 120, 255]);
+                renderer.draw_text(pixmap, &session.task, ox + 16.0, cy + 20.0, w - 32.0, 9.5, [200, 240, 210, 255]);
+                if has_scope {
+                    if let Some(ref scope) = session.scope {
+                        let caps = scope.capability_whitelist.as_ref()
+                            .map(|v| v.join(", "))
+                            .unwrap_or_else(|| "all".to_string());
+                        renderer.draw_text(pixmap, &format!("Scope: {}", caps), ox + 16.0, cy + 36.0, w - 32.0, 8.5, [120, 180, 140, 255]);
+                    }
+                }
+                session_card_h += card_h + 4.0;
             }
         }
 

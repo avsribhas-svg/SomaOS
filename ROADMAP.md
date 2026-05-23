@@ -164,10 +164,30 @@
 - Unified HITL queue aggregated on the orchestrator node
 - Token-based node auth with scoped permissions
 
-### v2.0 — USB Bootable + Plugin API
+### v2.0 — Orientation-Aligned Redesign ✅ COMPLETE
+
+**The Six Architectural Properties (`soma-substrate`)**
+- **Property 1: Full State Reflection**: Captures raw system state deltas (`SystemStateSnapshot` and `StateDelta`) before/after every agent action, presenting them back as neutral orientation data.
+- **Property 2: Capability-Gated Action Tiers**: Gated action space (`Observe`, `Touch`, `Operate`, `Control`, `Autonomous`) that expands and contracts dynamically based on behavioral consistency metrics.
+- **Property 3: System-State Mode Engine**: Detects overall system resource conditions (`Idle`, `Active`, `UnderLoad`, `Stressed`, `Degraded`, etc.) and dynamically reshapes information topology and action coherence.
+- **Property 4: Direct Consequence Observation**: Replaces artificial reward metrics with neutral consequence logging across immediate, short-term, and medium-term timescales.
+- **Property 5: Degrading Scaffold Lifecycle**: Attenuates external support structures (like the HITL approval gate) as the agent demonstrates maturity and consistency.
+- **Property 6: Architectural Self-Consistency Verification**: Meta-consistency engine (`CoherenceVerifier`) that cross-checks signals between properties and automatically resolves contradictions.
+
+**Integration & UI Additions**
+- **Compositor Menu Bar**: Live status-bar drawing of ActionTier progression dots, SystemMode indicators, and Scaffold shield percentages.
+- **Sidebar Dev Tab**: Integrated visualizer displaying developmental consistency graphs, trend logs, raw delta diffs, and trajectory paths.
+- **Intent Pipeline Integration**: Filters out actions exceeding the ActionTier and injects consequence predictions for topologically incoherent actions under resource-constrained states.
+
+---
+
+## Planned
+
+### v2.1 — USB Bootable + Plugin API
 - USB installer (GRUB + EFI, fits on 8 GB USB)
 - Plugin API: third-party capabilities as shared Rust dylibs or WASM modules
 - Seccomp + AppArmor sandboxing per capability
 - OTA update system (delta images, signed, agent-driven)
+
 
 

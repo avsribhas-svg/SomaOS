@@ -91,7 +91,7 @@ impl Capability for SheetsCapability {
             "create" => {
                 let title = params["title"].as_str().unwrap_or("Sheet 1").to_string();
                 let cells = params.get("cells").cloned().unwrap_or(Value::Object(Default::default()));
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AppAction",
@@ -106,7 +106,7 @@ impl Capability for SheetsCapability {
             "describe" => {
                 let cache = self.state_cache.lock().unwrap();
                 match cache.get(&window_id) {
-                    Some(state) => CapabilityResult {
+                    Some(state) => CapabilityResult { state_delta: None,
                         success: true,
                         data: json!({
                             "summary": state.summary,
@@ -115,7 +115,7 @@ impl Capability for SheetsCapability {
                         }),
                         error: None,
                     },
-                    None => CapabilityResult {
+                    None => CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(
@@ -130,7 +130,7 @@ impl Capability for SheetsCapability {
             "read_range" => {
                 let range = params["range"].as_str().unwrap_or("").to_string();
                 if range.is_empty() {
-                    return CapabilityResult {
+                    return CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(
@@ -143,7 +143,7 @@ impl Capability for SheetsCapability {
                 let cache = self.state_cache.lock().unwrap();
                 let state = match cache.get(&window_id) {
                     Some(s) => s,
-                    None => return CapabilityResult {
+                    None => return CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(
@@ -155,7 +155,7 @@ impl Capability for SheetsCapability {
 
                 let cells = match &state.cells {
                     Some(c) => c,
-                    None => return CapabilityResult {
+                    None => return CapabilityResult { state_delta: None,
                         success: true,
                         data: json!({ "range": range, "values": [] }),
                         error: None,
@@ -165,7 +165,7 @@ impl Capability for SheetsCapability {
                 // Parse range "A1:D5" → ((col_start, row_start), (col_end, row_end))
                 let (start, end) = match parse_range(&range) {
                     Some(r) => r,
-                    None => return CapabilityResult {
+                    None => return CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(
@@ -187,7 +187,7 @@ impl Capability for SheetsCapability {
                     grid.push(r);
                 }
 
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({ "range": range, "values": grid }),
                     error: None,
@@ -200,7 +200,7 @@ impl Capability for SheetsCapability {
                 let cell = params["cell"].as_str().unwrap_or("").to_string();
                 let value = params["value"].as_str().unwrap_or("").to_string();
                 if cell.is_empty() {
-                    return CapabilityResult {
+                    return CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(
@@ -209,7 +209,7 @@ impl Capability for SheetsCapability {
                         )),
                     };
                 }
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AppAction",
@@ -225,7 +225,7 @@ impl Capability for SheetsCapability {
                 let cell = params["cell"].as_str().unwrap_or("").to_string();
                 let formula = params["formula"].as_str().unwrap_or("").to_string();
                 if cell.is_empty() || formula.is_empty() {
-                    return CapabilityResult {
+                    return CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(
@@ -234,7 +234,7 @@ impl Capability for SheetsCapability {
                         )),
                     };
                 }
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AppAction",
@@ -246,7 +246,7 @@ impl Capability for SheetsCapability {
                 }
             }
 
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(

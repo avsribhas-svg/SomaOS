@@ -43,7 +43,7 @@ impl Capability for VisionCapability {
     fn execute(&self, action: &str, params: &Value) -> CapabilityResult {
         match action {
             "analyze_image" => self.analyze_image(params),
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown vision action: {}", action))),
@@ -65,7 +65,7 @@ impl VisionCapability {
             match fs::read(&path) {
                 Ok(bytes) => base64::engine::general_purpose::STANDARD.encode(&bytes),
                 Err(e) => {
-                    return CapabilityResult {
+                    return CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::NotFound, format!("Cannot read image '{}': {}", path, e))),
@@ -73,7 +73,7 @@ impl VisionCapability {
                 }
             }
         } else {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "Must provide 'path' or 'base64'")),
@@ -110,7 +110,7 @@ impl VisionCapability {
         match result {
             Ok(json) => {
                 let description = json["response"].as_str().unwrap_or("").to_string();
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "description": description,
@@ -120,7 +120,7 @@ impl VisionCapability {
                     error: None,
                 }
             }
-            Err(e) => CapabilityResult {
+            Err(e) => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::NetworkError, format!("Vision model request failed: {}", e))),

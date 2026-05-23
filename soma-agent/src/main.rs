@@ -5,6 +5,9 @@ mod intent;
 mod ipc;
 mod observer;
 mod providers;
+mod sandbox;
+mod session_manager;
+mod transport;
 
 use log::info;
 

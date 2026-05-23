@@ -71,7 +71,7 @@ impl Capability for MetaCapability {
             "describe_gap"    => execute_describe_gap(params),
             "list_governance" => execute_list_governance(),
             "promote"         => execute_promote(params),
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown meta action: {}", action))),
@@ -92,7 +92,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
     let name = match params["name"].as_str() {
         Some(n) if !n.is_empty() => n.to_string(),
         _ => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "'name' is required")),
@@ -103,7 +103,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
     let description = match params["description"].as_str() {
         Some(d) if !d.is_empty() => d.to_string(),
         _ => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "'description' is required")),
@@ -115,7 +115,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
     // pretty-print a canonical JSON before saving.
     let actions_val = &params["actions"];
     if !actions_val.is_array() {
-        return CapabilityResult {
+        return CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InvalidParam, "'actions' must be a JSON array")),
@@ -132,7 +132,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
     let def: ScriptCapabilityDef = match serde_json::from_value(def_value) {
         Ok(d) => d,
         Err(e) => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::InvalidParam, format!("Invalid capability definition: {}", e))),
@@ -142,7 +142,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
 
     let dir = capabilities_dir();
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        return CapabilityResult {
+        return CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Could not create capabilities directory: {}", e))),
@@ -153,7 +153,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
     let json = match serde_json::to_string_pretty(&def) {
         Ok(j) => j,
         Err(e) => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Serialization error: {}", e))),
@@ -164,7 +164,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
     match std::fs::write(&path, &json) {
         Ok(_) => {
             log::info!("Proposed capability '{}' saved to {:?}", def.name, path);
-            CapabilityResult {
+            CapabilityResult { state_delta: None,
                 success: true,
                 data: serde_json::json!({
                     "name": def.name,
@@ -180,7 +180,7 @@ fn execute_propose(params: &Value) -> CapabilityResult {
                 error: None,
             }
         }
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Failed to save capability definition: {}", e))),
@@ -208,13 +208,13 @@ fn execute_list_proposed() -> CapabilityResult {
                     }))
                 })
                 .collect();
-            CapabilityResult {
+            CapabilityResult { state_delta: None,
                 success: true,
                 data: serde_json::json!({ "capabilities": caps }),
                 error: None,
             }
         }
-        Err(_) => CapabilityResult {
+        Err(_) => CapabilityResult { state_delta: None,
             success: true,
             data: serde_json::json!({ "capabilities": [] }),
             error: None,
@@ -260,7 +260,7 @@ fn execute_list_governance() -> CapabilityResult {
         }
     }
 
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: true,
         data: serde_json::json!({ "capabilities": capabilities, "total": capabilities.len() }),
         error: None,
@@ -271,7 +271,7 @@ fn execute_list_governance() -> CapabilityResult {
 fn execute_promote(params: &Value) -> CapabilityResult {
     let name = match params["name"].as_str() {
         Some(n) if !n.is_empty() => n.to_string(),
-        _ => return CapabilityResult {
+        _ => return CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::MissingParam, "'name' is required")),
@@ -281,7 +281,7 @@ fn execute_promote(params: &Value) -> CapabilityResult {
     let cap_path = capabilities_dir().join(format!("{}.json", name));
     let content = match std::fs::read_to_string(&cap_path) {
         Ok(c) => c,
-        Err(_) => return CapabilityResult {
+        Err(_) => return CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::NotFound, format!("No script capability '{}' found", name))),
@@ -289,7 +289,7 @@ fn execute_promote(params: &Value) -> CapabilityResult {
     };
     let def: ScriptCapabilityDef = match serde_json::from_str(&content) {
         Ok(d) => d,
-        Err(e) => return CapabilityResult {
+        Err(e) => return CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InvalidParam, format!("Invalid JSON: {}", e))),
@@ -321,7 +321,7 @@ fn execute_promote(params: &Value) -> CapabilityResult {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     let promotions_dir = std::path::PathBuf::from(home).join(".soma").join("promotions");
     if let Err(e) = std::fs::create_dir_all(&promotions_dir) {
-        return CapabilityResult {
+        return CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Could not create promotions dir: {}", e))),
@@ -330,7 +330,7 @@ fn execute_promote(params: &Value) -> CapabilityResult {
 
     let out_path = promotions_dir.join(format!("{}.rs", name));
     match std::fs::write(&out_path, &stub) {
-        Ok(_) => CapabilityResult {
+        Ok(_) => CapabilityResult { state_delta: None,
             success: true,
             data: serde_json::json!({
                 "path": out_path.to_string_lossy(),
@@ -338,7 +338,7 @@ fn execute_promote(params: &Value) -> CapabilityResult {
             }),
             error: None,
         },
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Failed to write stub: {}", e))),
@@ -361,7 +361,7 @@ fn execute_describe_gap(params: &Value) -> CapabilityResult {
     let gap = match params["gap"].as_str() {
         Some(g) if !g.is_empty() => g.to_string(),
         _ => {
-            return CapabilityResult {
+            return CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::MissingParam, "'gap' is required")),
@@ -385,7 +385,7 @@ fn execute_describe_gap(params: &Value) -> CapabilityResult {
     match std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
         Ok(mut f) => {
             f.write_all(entry.as_bytes()).ok();
-            CapabilityResult {
+            CapabilityResult { state_delta: None,
                 success: true,
                 data: serde_json::json!({
                     "message": format!("Gap recorded in {}", log_path.display()),
@@ -394,7 +394,7 @@ fn execute_describe_gap(params: &Value) -> CapabilityResult {
                 error: None,
             }
         }
-        Err(e) => CapabilityResult {
+        Err(e) => CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Failed to write gap log: {}", e))),

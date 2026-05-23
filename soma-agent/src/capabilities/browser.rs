@@ -148,7 +148,7 @@ impl BrowserCapability {
         let path = screenshot_path();
         let screenshot_b64 = self.chromium_screenshot(&url, &path);
 
-        CapabilityResult {
+        CapabilityResult { state_delta: None,
             success: true,
             data: json!({
                 "url": url,
@@ -172,7 +172,7 @@ impl BrowserCapability {
         match self.curl_fetch(&url) {
             Ok(html) => {
                 let (title, text, links) = self.parse_page(&html);
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "url": url,
@@ -253,7 +253,7 @@ impl BrowserCapability {
                     })
                     .collect();
 
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "query": query,
@@ -276,7 +276,7 @@ impl BrowserCapability {
 
         let path = screenshot_path();
         let b64 = self.chromium_screenshot(&url, &path);
-        CapabilityResult {
+        CapabilityResult { state_delta: None,
             success: b64.is_some(),
             data: json!({
                 "url": url,
@@ -336,7 +336,7 @@ fn normalize_url(url: &str) -> String {
 }
 
 fn cap_err(msg: &str) -> CapabilityResult {
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: false,
         data: Value::Null,
         error: Some(CapabilityError::new(ErrorReason::InternalError, msg)),

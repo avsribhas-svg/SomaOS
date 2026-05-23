@@ -1,0 +1,16 @@
+[Unit]
+Description=SomaOS First-Boot Installer Wizard
+After=systemd-udevd.service
+Requires=systemd-udevd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/soma-compositor --installer
+Restart=on-failure
+RestartSec=3
+Environment=SOMA_MODE=installer
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

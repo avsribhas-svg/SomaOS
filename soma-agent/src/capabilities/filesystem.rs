@@ -97,7 +97,7 @@ impl Capability for FileSystemCapability {
             "move_item" => self.move_item(params),
             "find" => self.find(params),
             "file_info" => self.file_info(params),
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown filesystem action: {}", action))),
@@ -361,7 +361,7 @@ fn expand_tilde(path: &str) -> String {
 fn guard_traversal(path: &str) -> Result<(), CapabilityResult> {
     // Split on both / and \ and check each component
     if path.split(['/', '\\']).any(|c| c == "..") {
-        Err(CapabilityResult {
+        Err(CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(
@@ -375,7 +375,7 @@ fn guard_traversal(path: &str) -> Result<(), CapabilityResult> {
 }
 
 fn ok(data: Value) -> CapabilityResult {
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: true,
         data,
         error: None,
@@ -383,7 +383,7 @@ fn ok(data: Value) -> CapabilityResult {
 }
 
 fn err(msg: &str) -> CapabilityResult {
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: false,
         data: Value::Null,
         error: Some(CapabilityError::new(ErrorReason::InternalError, msg)),

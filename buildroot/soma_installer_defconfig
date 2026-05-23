@@ -1,0 +1,68 @@
+# SomaOS Installer Buildroot defconfig — v2.0
+# Creates a USB-bootable installer image with GRUB2 EFI + BIOS support.
+# Boots into the SomaOS first-boot wizard (soma-compositor in installer mode).
+
+# Architecture
+BR2_x86_64=y
+
+# Toolchain — musl for fully static binaries
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+
+# Kernel
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_USE_DEFCONFIG=y
+BR2_LINUX_KERNEL_DEFCONFIG="x86_64"
+BR2_LINUX_KERNEL_INSTALL_TARGET=y
+
+# Bootloader — GRUB2 with both BIOS and EFI support
+BR2_TARGET_GRUB2=y
+BR2_TARGET_GRUB2_I386_PC=y
+BR2_TARGET_GRUB2_X86_64_EFI=y
+BR2_TARGET_GRUB2_BUILTIN_MODULES_PC="boot linux ext2 fat part_msdos part_gpt normal biosdisk"
+BR2_TARGET_GRUB2_BUILTIN_MODULES_EFI="boot linux ext2 fat part_msdos part_gpt normal efi_gop"
+
+# Init system — systemd for service management
+BR2_INIT_SYSTEMD=y
+BR2_PACKAGE_SYSTEMD_LOGIND=y
+
+# Filesystem — ext2 for installer rootfs (smaller, fits on USB)
+# Output: buildroot/output/images/sdcard.img
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="2G"
+
+# Graphics — DRM/KMS for compositor (same as production)
+BR2_PACKAGE_LIBDRM=y
+BR2_PACKAGE_MESA3D=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_SWRAST=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_VIRGL=y
+BR2_PACKAGE_MESA3D_OPENGL_EGL=y
+
+# Input — evdev
+BR2_PACKAGE_EUDEV=y
+
+# Fonts
+BR2_PACKAGE_DEJAVU=y
+
+# Networking — for first-boot config and LLM API key entry
+BR2_PACKAGE_DHCPCD=y
+BR2_PACKAGE_CA_CERTIFICATES=y
+BR2_PACKAGE_LIBCURL=y
+
+# Storage utilities — needed by installer wizard to write target disk
+BR2_PACKAGE_E2FSPROGS=y
+BR2_PACKAGE_PARTED=y
+BR2_PACKAGE_DOSFSTOOLS=y
+
+# Utilities
+BR2_PACKAGE_BASH=y
+BR2_PACKAGE_UTIL_LINUX=y
+
+# Overlay: installer binaries + systemd service
+# Populated by: make build-installer-x86 or make build-installer-arm64
+BR2_ROOTFS_OVERLAY="buildroot/installer_overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="buildroot/post-build-installer.sh"
+
+# No audio in installer image (saves space)
+# No SSH in installer (security — no open ports before first boot)

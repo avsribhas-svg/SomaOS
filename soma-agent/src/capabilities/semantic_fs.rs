@@ -81,7 +81,7 @@ impl Capability for SemanticFsCapability {
             "annotate"       => self.annotate(params),
             "get_history"    => self.get_history(params),
             "list_tagged"    => self.list_tagged(params),
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(
@@ -488,7 +488,7 @@ impl SemanticFsCapability {
                     "history": history,
                 }))
             }
-            Err(_) => CapabilityResult {
+            Err(_) => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(
@@ -559,7 +559,7 @@ fn expand_tilde(path: &str) -> String {
 
 fn guard_traversal(path: &str) -> Result<(), CapabilityResult> {
     if path.split(['/', '\\']).any(|c| c == "..") {
-        Err(CapabilityResult {
+        Err(CapabilityResult { state_delta: None,
             success: false,
             data: Value::Null,
             error: Some(CapabilityError::new(
@@ -577,11 +577,11 @@ fn guard_traversal(path: &str) -> Result<(), CapabilityResult> {
 // ---------------------------------------------------------------------------
 
 fn ok(data: Value) -> CapabilityResult {
-    CapabilityResult { success: true, data, error: None }
+    CapabilityResult { state_delta: None, success: true, data, error: None }
 }
 
 fn err(msg: &str) -> CapabilityResult {
-    CapabilityResult {
+    CapabilityResult { state_delta: None,
         success: false,
         data: Value::Null,
         error: Some(CapabilityError::new(ErrorReason::InternalError, msg)),

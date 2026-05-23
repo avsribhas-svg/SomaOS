@@ -45,7 +45,7 @@ The HITL (Human-in-the-Loop) approval system is the conflict resolution primitiv
 
 ## Abstract
 
-Current state (v1.1 stable): SomaOS runs as a bootable Linux image with a custom bare-metal compositor and dual-interface native apps where both the human and the agent use the same GUI and data model simultaneously.
+Current state (v2.0 stable): SomaOS runs as a bootable Linux image with a custom bare-metal compositor, a new substrate crate enforcing the six core properties of orientation-aligned AI safety, and dual-interface native apps where both the human and the agent use the same GUI and data model simultaneously.
 
 The system provides:
 - A **full macOS-style desktop environment** — floating windows, a centred dock, a menu bar, and an AI sidebar as a slide-in overlay. The terminal and browser are applications, not panels.
@@ -111,10 +111,26 @@ The system provides:
 | Component | Role | Technology |
 |-----------|------|------------|
 | **soma-common** | Shared types, IPC protocol, capability types | Rust, serde |
+| **soma-substrate** | Implements the six core properties of orientation-aligned AI safety | Rust, sysinfo |
 | **soma-agent** | Intent parsing, capability execution, conversation context, desktop observer | Rust, reqwest, tokio |
 | **soma-compositor** | DRM/KMS display, desktop environment, floating windows, dock, menu bar, sidebar overlay | Rust, drm, evdev, tiny-skia, cosmic-text |
 | **soma-cli** | Terminal test client for agent interaction | Rust, tokio |
 | **Buildroot Image** | Minimal Linux rootfs, bootloader, systemd services | Buildroot, GRUB2, systemd |
+
+---
+
+## The V2 Orientation-Aligned Redesign (`soma-substrate`)
+
+v2.0 transitions SomaOS from a goal-directed command-execute agent shell into an **orientation-aligned operating system**. Rather than relying on rigid outer constraints, the agent develops self-regulating, safe behavior through systemic architectural properties.
+
+This is implemented via a dedicated crate, **`soma-substrate`**, which operates at the hardware and system layer to manage:
+
+1. **Full State Reflection**: Before and after every capability execution, the compositor and agent capture a raw `SystemStateSnapshot` (CPU, memory, disk usage, active PIDs). The computed `StateDelta` is presented back to the agent as objective feedback of its impact.
+2. **Capability-Gated Action Tiers**: Static risk levels are replaced with a dynamic progression of tiers (`Observe` ➔ `Touch` ➔ `Operate` ➔ `Control` ➔ `Autonomous`). The agent's action space expands as it demonstrates behavioral consistency and contracts instantly during anomalies.
+3. **System-State Mode Engine**: Detects raw resource load (`Idle`, `Active`, `UnderLoad`, `Stressed`, `Degraded`, etc.). Under stress or low memory, it reshapes the agent's **Information Topology**, making resource metrics high-frequency signals and flagging heavy operations as contextually incoherent.
+4. **Direct Consequence Observation**: Consequence records track immediate, short-term (5s), and medium-term (60s) system side effects. The agent predicts its action's delta before execution, and the delta comparison measures and drives developmental maturity.
+5. **Degrading Scaffold Lifecycle**: External safety constructs (like the HITL approval gate) are treated as transient scaffolds. As the agent's behavioral consistency window grows, scaffolds automatically fade; they immediately reactivate if the tier contracts.
+6. **Architectural Self-Consistency Verification**: A meta-verifier (`CoherenceVerifier`) continuously checks that all properties are aligned (e.g. preventing privileged control actions while the system is in `Stressed` mode), self-correcting the system when contradictions arise.
 
 ---
 

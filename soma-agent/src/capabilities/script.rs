@@ -104,7 +104,7 @@ impl Capability for ScriptCapability {
         let script_action = match self.def.actions.iter().find(|a| a.name == action) {
             Some(a) => a,
             None => {
-                return CapabilityResult {
+                return CapabilityResult { state_delta: None,
                     success: false,
                     data: Value::Null,
                     error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown action '{}' in capability '{}'", action, self.def.name))),
@@ -133,20 +133,20 @@ impl Capability for ScriptCapability {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 if output.status.success() {
-                    CapabilityResult {
+                    CapabilityResult { state_delta: None,
                         success: true,
                         data: serde_json::json!({ "output": stdout.trim() }),
                         error: None,
                     }
                 } else {
-                    CapabilityResult {
+                    CapabilityResult { state_delta: None,
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::CommandFailed, if stderr.is_empty() { stdout } else { stderr })),
                     }
                 }
             }
-            Err(e) => CapabilityResult {
+            Err(e) => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::CommandFailed, format!("Failed to execute command: {}", e))),

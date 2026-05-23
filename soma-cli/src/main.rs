@@ -192,6 +192,7 @@ async fn execute_scenario(s: Scenario) -> Result<String, String> {
     // Send natural language prompt
     let msg = serde_json::to_string(&CompositorMessage::NaturalLanguageInput {
         text: s.prompt.clone(),
+        session_id: None,
     })
     .unwrap();
     writer.write_all(format!("{}\n", msg).as_bytes()).await
@@ -216,7 +217,7 @@ async fn execute_scenario(s: Scenario) -> Result<String, String> {
             .map_err(|e| format!("Parse error: {} on: {}", e, &trimmed[..trimmed.len().min(80)]))?;
 
         match agent_msg {
-            AgentMessage::TaskPlanReady { id, plan } => {
+            AgentMessage::TaskPlanReady { id, plan, .. } => {
                 // Validate expectations before approving
                 plan_steps = plan.steps.iter()
                     .map(|step| (step.capability.clone(), step.action.clone()))
@@ -226,7 +227,7 @@ async fn execute_scenario(s: Scenario) -> Result<String, String> {
                     let found = plan_steps.iter().any(|(cap, _)| cap == exp_cap);
                     if !found {
                         // Reject plan and fail
-                        let reject = serde_json::to_string(&CompositorMessage::Reject { id: id.clone() }).unwrap();
+                        let reject = serde_json::to_string(&CompositorMessage::Reject { id: id.clone(), session_id: None }).unwrap();
                         let _ = writer.write_all(format!("{}\n", reject).as_bytes()).await;
                         return Err(format!(
                             "Expected capability '{}', plan used: {}",
@@ -239,7 +240,7 @@ async fn execute_scenario(s: Scenario) -> Result<String, String> {
                 if let Some(ref exp_act) = s.expect_action {
                     let found = plan_steps.iter().any(|(_, act)| act == exp_act);
                     if !found {
-                        let reject = serde_json::to_string(&CompositorMessage::Reject { id: id.clone() }).unwrap();
+                        let reject = serde_json::to_string(&CompositorMessage::Reject { id: id.clone(), session_id: None }).unwrap();
                         let _ = writer.write_all(format!("{}\n", reject).as_bytes()).await;
                         return Err(format!(
                             "Expected action '{}', plan used: {}",
@@ -252,9 +253,9 @@ async fn execute_scenario(s: Scenario) -> Result<String, String> {
                 plan_id = Some(id.clone());
 
                 let response = if s.auto_approve {
-                    CompositorMessage::Approve { id }
+                    CompositorMessage::Approve { id, session_id: None }
                 } else {
-                    CompositorMessage::Reject { id }
+                    CompositorMessage::Reject { id, session_id: None }
                 };
                 let json = serde_json::to_string(&response).unwrap();
                 writer.write_all(format!("{}\n", json).as_bytes()).await
@@ -377,10 +378,10 @@ async fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
 
                 if let Some(ref plan_id) = pending_approval {
                     let msg = if input == "y" || input == "yes" {
-                        CompositorMessage::Approve { id: plan_id.clone() }
+                        CompositorMessage::Approve { id: plan_id.clone(), session_id: None }
                     } else {
                         println!("[Plan rejected]");
-                        CompositorMessage::Reject { id: plan_id.clone() }
+                        CompositorMessage::Reject { id: plan_id.clone(), session_id: None }
                     };
                     pending_approval = None;
                     let json = serde_json::to_string(&msg)?;
@@ -396,7 +397,7 @@ async fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
                 } else if let Some(cmd) = input.strip_prefix("/exec ") {
                     CompositorMessage::DirectExec { id: simple_id(), command: cmd.to_string() }
                 } else {
-                    CompositorMessage::NaturalLanguageInput { text: input }
+                    CompositorMessage::NaturalLanguageInput { text: input, session_id: None }
                 };
 
                 let json = serde_json::to_string(&msg)?;
@@ -412,7 +413,7 @@ async fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
 
 fn handle_agent_message(msg: AgentMessage) -> Option<String> {
     match msg {
-        AgentMessage::TaskPlanReady { id, plan } => {
+        AgentMessage::TaskPlanReady { id, plan, .. } => {
             println!();
             println!("┌─── Task Plan ───────────────────────────┐");
             println!("│ Intent: {}", plan.intent);

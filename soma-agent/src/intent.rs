@@ -34,7 +34,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                     action: $action.to_string(),
                     params: serde_json::Value::Object(Default::default()),
                     description: $intent.to_string(),
-                }],
+                    predicted_delta: None,
+}],
                 risk_level: RiskLevel::Low,
             })
         };
@@ -88,7 +89,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "list_processes".to_string(),
                 params: serde_json::Value::Object(Default::default()),
                 description: "list_processes".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -114,7 +116,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "create".to_string(),
                 params: serde_json::json!({ "title": title.trim(), "cells": cells }),
                 description: "create_spreadsheet".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -140,7 +143,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "create".to_string(),
                 params: serde_json::json!({ "title": title.trim(), "blocks": blocks }),
                 description: "create_document".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -175,7 +179,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "list_dir".to_string(),
                 params: serde_json::json!({ "path": path }),
                 description: "list_dir".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -197,7 +202,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "read_file".to_string(),
                 params: serde_json::json!({ "path": path }),
                 description: "read_file".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -214,7 +220,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "browser".to_string(), action: "navigate".to_string(),
                 params: serde_json::json!({ "url": url }),
                 description: "browser_navigate".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -230,7 +237,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "browser".to_string(), action: "navigate".to_string(),
                 params: serde_json::json!({ "url": url }),
                 description: "browser_navigate".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -246,7 +254,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "browser".to_string(), action: "search".to_string(),
                 params: serde_json::json!({ "query": query }),
                 description: "browser_search".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -265,7 +274,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "filesystem".to_string(), action: "write_file".to_string(),
                 params: serde_json::json!({ "path": path, "content": content }),
                 description: "write_file".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -282,7 +292,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "filesystem".to_string(), action: "create_dir".to_string(),
                 params: serde_json::json!({ "path": path }),
                 description: "create_dir".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -299,7 +310,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "filesystem".to_string(), action: "delete".to_string(),
                 params: serde_json::json!({ "path": path }),
                 description: "delete_file".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -314,7 +326,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "browser".to_string(), action: "screenshot".to_string(),
                 params: serde_json::Value::Object(Default::default()),
                 description: "browser_screenshot".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -331,7 +344,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                     capability: "filesystem".to_string(), action: "copy".to_string(),
                     params: serde_json::json!({ "from": paths[0], "to": paths[1] }),
                     description: "copy_file".to_string(),
-                }],
+                    predicted_delta: None,
+}],
                 risk_level: soma_common::RiskLevel::Low,
             });
         }
@@ -363,7 +377,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "filesystem".to_string(), action: "find".to_string(),
                 params: serde_json::json!({ "path": path, "pattern": pattern }),
                 description: "find_files".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -377,7 +392,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "network".to_string(), action: "ping".to_string(),
                 params: serde_json::json!({ "host": host }),
                 description: "ping".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -391,7 +407,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "network".to_string(), action: "dns_lookup".to_string(),
                 params: serde_json::json!({ "host": host }),
                 description: "dns_lookup".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -402,7 +419,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "network".to_string(), action: "port_check".to_string(),
                 params: serde_json::json!({ "host": "localhost", "port": 80 }),
                 description: "port_check".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -418,7 +436,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "network".to_string(), action: "curl".to_string(),
                 params: serde_json::json!({ "url": url }),
                 description: "curl".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -434,7 +453,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "package".to_string(), action: "list_installed".to_string(),
                 params: serde_json::Value::Object(Default::default()),
                 description: "list_installed".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -446,7 +466,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "package".to_string(), action: "search".to_string(),
                 params: serde_json::json!({ "package": pkg }),
                 description: "package_search".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -461,7 +482,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "package".to_string(), action: "install".to_string(),
                 params: serde_json::json!({ "package": pkg }),
                 description: "package_install".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Medium,
         });
     }
@@ -476,7 +498,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "process".to_string(), action: "service_list".to_string(),
                 params: serde_json::Value::Object(Default::default()),
                 description: "service_list".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -490,7 +513,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "process".to_string(), action: "service_status".to_string(),
                 params: serde_json::json!({ "service": svc }),
                 description: "service_status".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -505,7 +529,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "process".to_string(), action: "kill_process".to_string(),
                 params: serde_json::json!({ "pid": pid }),
                 description: "kill_process".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::High,
         });
     }
@@ -521,7 +546,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "desktop_agent".to_string(), action: "spawn_app".to_string(),
                 params: serde_json::json!({ "app": "terminal" }),
                 description: "spawn_terminal".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -536,7 +562,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "desktop_agent".to_string(), action: "spawn_app".to_string(),
                 params: serde_json::json!({ "app": "browser" }),
                 description: "spawn_browser".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -551,7 +578,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "desktop_agent".to_string(), action: "start_agent_mode".to_string(),
                 params: serde_json::json!({ "task": task }),
                 description: "start_agent_mode".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -567,7 +595,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "semantic_fs".to_string(), action: "find_by_intent".to_string(),
                 params: serde_json::json!({ "intent": intent_str }),
                 description: "semantic_find".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -581,7 +610,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "semantic_fs".to_string(), action: "list_tagged".to_string(),
                 params: serde_json::Value::Object(Default::default()),
                 description: "list_tagged".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -593,7 +623,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "semantic_fs".to_string(), action: "describe_file".to_string(),
                 params: serde_json::json!({ "path": path }),
                 description: "describe_file".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -606,7 +637,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "semantic_fs".to_string(), action: "annotate".to_string(),
                 params: serde_json::json!({ "path": path, "note": note }),
                 description: "annotate_file".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -624,7 +656,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "docs".to_string(), action: "append_block".to_string(),
                 params: serde_json::json!({ "window_id": 0, "block": { "type": "paragraph", "text": text } }),
                 description: "docs_append".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -640,7 +673,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "docs".to_string(), action: "write_block".to_string(),
                 params: serde_json::json!({ "window_id": 0, "index": 0, "block": { "type": "heading", "level": 1, "text": text } }),
                 description: "docs_write_block".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -657,7 +691,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "filesystem".to_string(), action: "file_info".to_string(),
                 params: serde_json::json!({ "path": path }),
                 description: "file_info".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -670,7 +705,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "sheets".to_string(), action: "apply_formula".to_string(),
                 params: serde_json::json!({ "window_id": 0, "cell": "A1", "formula": "=SUM(A1:A3)" }),
                 description: "sheets_apply_formula".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -685,7 +721,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "sheets".to_string(), action: "write_cell".to_string(),
                 params: serde_json::json!({ "window_id": 0, "cell": "A1", "value": "" }),
                 description: "sheets_write_cell".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -696,7 +733,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "sheets".to_string(), action: "read_range".to_string(),
                 params: serde_json::json!({ "window_id": 0, "range": "A1:D5" }),
                 description: "sheets_read_range".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -707,7 +745,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "sheets".to_string(), action: "describe".to_string(),
                 params: serde_json::json!({ "window_id": 0 }),
                 description: "sheets_describe".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -722,7 +761,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "docs".to_string(), action: "describe".to_string(),
                 params: serde_json::json!({ "window_id": 0 }),
                 description: "docs_describe".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -735,7 +775,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "meta".to_string(), action: "propose".to_string(),
                 params: serde_json::json!({ "description": input }),
                 description: "meta_propose".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -746,7 +787,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "meta".to_string(), action: "list_proposed".to_string(),
                 params: serde_json::Value::Object(Default::default()),
                 description: "meta_list_proposed".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -760,7 +802,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "meta".to_string(), action: "describe_gap".to_string(),
                 params: serde_json::json!({ "gap": input }),
                 description: "meta_describe_gap".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -773,7 +816,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 capability: "desktop_agent".to_string(), action: "get_workflow_history".to_string(),
                 params: serde_json::Value::Object(Default::default()),
                 description: "get_workflow_history".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -805,7 +849,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                     action: "tag".to_string(),
                     params,
                     description: "tag_file".to_string(),
-                }],
+                    predicted_delta: None,
+}],
                 risk_level: soma_common::RiskLevel::Low,
             });
         }
@@ -824,7 +869,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "get_session_status".to_string(),
                 params: serde_json::Value::Object(Default::default()),
                 description: "session_status".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -841,7 +887,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "list_governance".to_string(),
                 params: serde_json::Value::Object(Default::default()),
                 description: "list_governance".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -864,7 +911,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "promote".to_string(),
                 params: serde_json::json!({ "name": name }),
                 description: "promote_capability".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -880,7 +928,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "describe".to_string(),
                 params: serde_json::json!({ "window_id": 0 }),
                 description: "media_describe".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -906,7 +955,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "generate".to_string(),
                 params: serde_json::json!({ "prompt": prompt, "window_id": 0 }),
                 description: "media_generate".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -924,7 +974,8 @@ fn preprocess_input(input: &str) -> Option<TaskPlan> {
                 action: "save".to_string(),
                 params: serde_json::json!({ "path": path, "window_id": 0 }),
                 description: "media_save".to_string(),
-            }],
+                predicted_delta: None,
+}],
             risk_level: soma_common::RiskLevel::Low,
         });
     }
@@ -1038,43 +1089,76 @@ impl IntentParser {
         context_pairs: &[(String, String)],
         registry: &CapabilityRegistry,
     ) -> Result<TaskPlan, String> {
-        // Layer 0 — instant, no LLM call
-        if let Some(plan) = preprocess_input(input) {
+        let mut final_plan = if let Some(plan) = preprocess_input(input) {
             log::info!("Layer0 fast path: '{}'", input);
-            return Ok(plan);
-        }
+            plan
+        } else {
+            // Build tool schemas from registry
+            let tools = build_tools(registry);
 
-        // Build tool schemas from registry
-        let tools = build_tools(registry);
+            // LLM tool-use call — retry once on failure (small models are non-deterministic)
+            let calls = match self.provider.tool_call(input, context_pairs, &tools).await {
+                Ok(c) => c,
+                Err(first_err) => {
+                    log::warn!("First LLM attempt failed ({}), retrying...", first_err);
+                    self.provider.tool_call(input, context_pairs, &tools).await?
+                }
+            };
+            log::info!("Tool calls returned: {:?}", calls.iter().map(|c| &c.name).collect::<Vec<_>>());
 
-        // LLM tool-use call — retry once on failure (small models are non-deterministic)
-        let calls = match self.provider.tool_call(input, context_pairs, &tools).await {
-            Ok(c) => c,
-            Err(first_err) => {
-                log::warn!("First LLM attempt failed ({}), retrying...", first_err);
-                self.provider.tool_call(input, context_pairs, &tools).await?
+            // Semantic consistency check: if user asked for a document but model returned
+            // only sheets calls, retry once with a more targeted hint.
+            let s = input.to_lowercase();
+            let wants_doc = s.contains("document") || s.contains("write") || s.contains("report")
+                || s.contains("summary") || s.contains("essay") || s.contains("letter");
+            let got_only_sheets = !calls.is_empty()
+                && calls.iter().all(|c| c.name.starts_with("sheets__"));
+            if wants_doc && got_only_sheets {
+                log::warn!("Semantic mismatch: user wants document but got sheets. Retrying with hint.");
+                let hint = format!("{} (Use docs__create, not sheets__create.)", input);
+                if let Ok(retry_calls) = self.provider.tool_call(&hint, context_pairs, &tools).await {
+                    if retry_calls.iter().any(|c| c.name.starts_with("docs__")) {
+                        log::info!("Semantic retry succeeded: {:?}", retry_calls.iter().map(|c| &c.name).collect::<Vec<_>>());
+                        tool_calls_to_task_plan(retry_calls, input)
+                    } else {
+                        tool_calls_to_task_plan(calls, input)
+                    }
+                } else {
+                    tool_calls_to_task_plan(calls, input)
+                }
+            } else {
+                tool_calls_to_task_plan(calls, input)
             }
         };
-        log::info!("Tool calls returned: {:?}", calls.iter().map(|c| &c.name).collect::<Vec<_>>());
 
-        // Semantic consistency check: if user asked for a document but model returned
-        // only sheets calls, retry once with a more targeted hint.
-        let s = input.to_lowercase();
-        let wants_doc = s.contains("document") || s.contains("write") || s.contains("report")
-            || s.contains("summary") || s.contains("essay") || s.contains("letter");
-        let got_only_sheets = !calls.is_empty()
-            && calls.iter().all(|c| c.name.starts_with("sheets__"));
-        if wants_doc && got_only_sheets {
-            log::warn!("Semantic mismatch: user wants document but got sheets. Retrying with hint.");
-            let hint = format!("{} (Use docs__create, not sheets__create.)", input);
-            if let Ok(retry_calls) = self.provider.tool_call(&hint, context_pairs, &tools).await {
-                if retry_calls.iter().any(|c| c.name.starts_with("docs__")) {
-                    log::info!("Semantic retry succeeded: {:?}", retry_calls.iter().map(|c| &c.name).collect::<Vec<_>>());
-                    return Ok(tool_calls_to_task_plan(retry_calls, input));
-                }
+        // Gating / V2 filtering
+        let history_mgr = soma_substrate::BehavioralHistoryManager::new();
+        let mut mode_engine = soma_substrate::ModeEngine::new();
+        let mut tier_gate = soma_substrate::TierGate::new();
+        let mut reflector = soma_substrate::StateReflector::new();
+        
+        let current_state = reflector.capture_snapshot();
+        let current_mode = mode_engine.evaluate(&current_state);
+        let _ = tier_gate.evaluate_transitions(&history_mgr.history, current_mode);
+
+        // Filter out steps blocked by the ActionTier
+        final_plan.steps.retain(|step| {
+            let permitted = tier_gate.check_action_permitted(&step.capability, &step.action);
+            if !permitted {
+                log::warn!("Filtered step {}.{} from plan because it exceeds current ActionTier ({:?})", step.capability, step.action, tier_gate.current_tier);
+            }
+            permitted
+        });
+
+        // Information topology incoherent predictions
+        let topology = mode_engine.get_information_topology();
+        for step in &mut final_plan.steps {
+            let step_name = format!("{}.{}", step.capability, step.action);
+            if topology.incoherent_actions.contains(&step_name) && step.predicted_delta.is_none() {
+                step.predicted_delta = Some("System is currently Under Load / Stressed. Prediction required to proceed safely.".to_string());
             }
         }
 
-        Ok(tool_calls_to_task_plan(calls, input))
+        Ok(final_plan)
     }
 }

@@ -55,11 +55,13 @@ impl MediaApp {
                         success: true,
                         data: json!({ "path": path, "bytes": bytes.len() }),
                         error: None,
+                        state_delta: None,
                     },
                     Err(e) => CapabilityResult {
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::InternalError, format!("Write error: {}", e))),
+                        state_delta: None,
                     },
                 }
             }
@@ -67,6 +69,7 @@ impl MediaApp {
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::NotFound, "No image to save — generate one first")),
+                state_delta: None,
             },
         }
     }
@@ -94,12 +97,13 @@ impl NativeAppContent for MediaApp {
                     self.prompt = p.to_string();
                     self.status = MediaStatus::Generating;
                     self.dirty = true;
-                    CapabilityResult { success: true, data: json!({ "prompt": self.prompt }), error: None }
+                    CapabilityResult { success: true, data: json!({ "prompt": self.prompt }), error: None, state_delta: None }
                 } else {
                     CapabilityResult {
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::MissingParam, "prompt required")),
+                        state_delta: None,
                     }
                 }
             }
@@ -111,7 +115,7 @@ impl NativeAppContent for MediaApp {
                     "idle"       => MediaStatus::Idle,
                     s            => MediaStatus::Error(s.to_string()),
                 };
-                CapabilityResult { success: true, data: json!({ "status": status }), error: None }
+                CapabilityResult { success: true, data: json!({ "status": status }), error: None, state_delta: None }
             }
             "set_image" => {
                 if let Some(b64) = params.get("image_base64").and_then(|v| v.as_str()) {
@@ -122,12 +126,13 @@ impl NativeAppContent for MediaApp {
                             self.status = MediaStatus::Done;
                             self.dirty = true;
                             let len = self.image_bytes.as_ref().unwrap().len();
-                            CapabilityResult { success: true, data: json!({ "bytes": len }), error: None }
+                            CapabilityResult { success: true, data: json!({ "bytes": len }), error: None, state_delta: None }
                         }
                         Err(e) => CapabilityResult {
                             success: false,
                             data: Value::Null,
                             error: Some(CapabilityError::new(ErrorReason::InvalidParam, format!("base64 decode error: {}", e))),
+                            state_delta: None,
                         },
                     }
                 } else {
@@ -135,6 +140,7 @@ impl NativeAppContent for MediaApp {
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::MissingParam, "image_base64 required")),
+                        state_delta: None,
                     }
                 }
             }
@@ -145,6 +151,7 @@ impl NativeAppContent for MediaApp {
                         success: false,
                         data: Value::Null,
                         error: Some(CapabilityError::new(ErrorReason::MissingParam, "path required")),
+                        state_delta: None,
                     },
                 };
                 self.save_image(&path)
@@ -156,6 +163,7 @@ impl NativeAppContent for MediaApp {
                     ErrorReason::UnknownAction,
                     format!("Unknown media action: {}", action),
                 )),
+                state_delta: None,
             },
         }
     }

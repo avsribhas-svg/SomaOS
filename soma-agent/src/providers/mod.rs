@@ -185,6 +185,7 @@ pub fn tool_calls_to_task_plan(calls: Vec<ToolCall>, user_input: &str) -> TaskPl
             action,
             params: call.arguments,
             description,
+            predicted_delta: None,
         });
     }
 

@@ -88,7 +88,7 @@ impl Capability for DesktopAgentCapability {
                 } else {
                     json!(null)
                 };
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "AgentModeStarted",
@@ -99,13 +99,13 @@ impl Capability for DesktopAgentCapability {
                 }
             }
             "get_session_status" => {
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({ "ipc_message": "GetSessionStatus" }),
                     error: None,
                 }
             }
-            "end_agent_mode" => CapabilityResult {
+            "end_agent_mode" => CapabilityResult { state_delta: None,
                 success: true,
                 data: json!({ "ipc_message": "AgentModeEnded" }),
                 error: None,
@@ -115,7 +115,7 @@ impl Capability for DesktopAgentCapability {
                 let app_id = params["app_id"].as_str().unwrap_or("app").to_string();
                 let description = params["description"].as_str().unwrap_or("").to_string();
                 let widgets_json = params["widgets_json"].as_str().unwrap_or("[]").to_string();
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "SpawnApp",
@@ -129,7 +129,7 @@ impl Capability for DesktopAgentCapability {
             }
             "desktop_action" => {
                 let action_str = params["action"].as_str().unwrap_or("").to_string();
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "DesktopAction",
@@ -142,7 +142,7 @@ impl Capability for DesktopAgentCapability {
                 // The actual history is stored in the observer, which lives
                 // in the IPC handler. We return a marker so the IPC layer
                 // can inject the real data.
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({ "ipc_message": "GetWorkflowHistory" }),
                     error: None,
@@ -150,7 +150,7 @@ impl Capability for DesktopAgentCapability {
             }
             "update_activity" => {
                 let text = params["text"].as_str().unwrap_or("").to_string();
-                CapabilityResult {
+                CapabilityResult { state_delta: None,
                     success: true,
                     data: json!({
                         "ipc_message": "ActivityUpdate",
@@ -159,7 +159,7 @@ impl Capability for DesktopAgentCapability {
                     error: None,
                 }
             }
-            _ => CapabilityResult {
+            _ => CapabilityResult { state_delta: None,
                 success: false,
                 data: Value::Null,
                 error: Some(CapabilityError::new(ErrorReason::UnknownAction, format!("Unknown desktop_agent action: {}", action))),
